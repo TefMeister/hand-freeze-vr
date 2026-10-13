@@ -2,7 +2,8 @@
 
 <img src="app/screenshot_off.png" width="300"> <img src="app/screenshot_on.png" width="300">
 
-A pixel-art desktop app: a round switch (red OFF, fading to green ON), a seconds picker, and three rows,
+A small desktop app that freezes your VR hands in place, so you can set the controllers down and fine-tune
+hand and weapon poses. It has a round switch (red OFF, fading to green ON), a seconds picker, and three rows,
 **LEFT HAND**, **RIGHT HAND** and **BOTH HANDS**, each with a snowflake **FREEZE** button and a flame **UN-FREEZE** button.
 Press FREEZE, hold the controllers where you want the in-game hands, and when the countdown runs out (it
 shows in the snowflake, with a beep each second and a long beep at the end) those hands stay exactly
