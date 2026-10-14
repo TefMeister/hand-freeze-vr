@@ -15,6 +15,13 @@ a frozen winter while it is on.
 Made for tuning hand and finger poses in our VR mods (2026-10-13), where holding two controllers in
 one hand while dragging sliders on the monitor was the only way before.
 
+## Get it
+
+Download the zip from [Releases](https://github.com/TefMeister/hand-freeze-vr/releases), unzip it, right-click
+`install.ps1` and choose **Run with PowerShell**. A **Hand Freeze** icon appears on the desktop; no administrator
+rights are needed. With the [Lanes plugin](https://github.com/TefMeister/lanes-plugin), `/lanes:setup` installs it
+for you and `/lanes:update` says when a newer one is out.
+
 ## Use
 
 1. Double-click **Hand Freeze** on the desktop and press the round switch: **ON**. Leave it on.
