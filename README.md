@@ -103,8 +103,8 @@ headset or a real game.**
   a warning, which the OpenXR loader allows as long as one layer loads. `test/instance_test.c` proves it: built as a
   32-bit and a 64-bit program, each asks the loader for an instance with both copies registered
   `[verified-numerically 2026-10-14, n=1 each]`; with only the 64-bit copy the 32-bit one failed exactly like Manhunt.
-- **Buttons too** is new (v3, 2026-10-14): compiled, and the layer still loads and holds both hands on the simulator with
-  it in; the button hold itself has not yet been tried in a game.
+- **Buttons too** (v3, 2026-10-14) works in a real game: Visceral RE2 VR's hand tuning with the controllers on the desk
+  (Tefa, 2026-10-14 23:00: "hand freeze with buttons is working!") `[verified-live 2026-10-14, n=1]`.
 - Hand tracking (finger tracking without controllers) is not held, only controller poses.
 
 ## Credit
