@@ -17,6 +17,12 @@
 // v2 (2026-10-13): LEFT / RIGHT / BOTH. Each controller space is sorted into a hand once: by the subaction path it was
 // made with (/user/hand/left or /right), else by where its action is bound (xrEnumerateBoundSourcesForAction). A space
 // whose hand cannot be told is held only when both hands are frozen.
+// v3 (2026-10-14): THE BUTTONS TOO. With the app's "BUTTONS TOO" box ticked, a freeze also holds what the fingers are
+// doing: every action state the game asks for (xrGetActionStateBoolean / Float / Vector2f: buttons, triggers, grips,
+// sticks) is taken once at the first ask after the freeze and answered the same way until UN-FREEZE, with
+// changedSinceLastSync false. An action is sorted into a hand like a space: by the subaction path it is asked with,
+// else by where it is bound; one bound to both hands (or to neither) is held only with BOTH. Poses (xrGetActionStatePose)
+// are left alone: they only say whether a controller is active.
 #define XR_NO_PROTOTYPES
 #include <windows.h>
 #include <openxr/openxr.h>
@@ -41,6 +47,9 @@ PFN_xrLocateSpaces g_next_locate_spaces = nullptr;
 PFN_xrLocateSpacesKHR g_next_locate_spaces_khr = nullptr;
 PFN_xrPathToString g_next_path_to_string = nullptr;
 PFN_xrEnumerateBoundSourcesForAction g_next_bound_sources = nullptr;
+PFN_xrGetActionStateBoolean g_next_state_bool = nullptr;
+PFN_xrGetActionStateFloat g_next_state_float = nullptr;
+PFN_xrGetActionStateVector2f g_next_state_vec2 = nullptr;
 XrInstance g_instance = XR_NULL_HANDLE;
 
 enum Hand : int { HAND_NOT_LOOKED = 0, HAND_LEFT = 1, HAND_RIGHT = 2, HAND_UNKNOWN = 3 };
@@ -49,9 +58,17 @@ struct Controller {
     int hand = HAND_NOT_LOOKED;
     bool kept = false; LONG kept_generation = 0; XrPosef pose_in_room{};
 };
+// v3: one input = one action asked with one subaction path (a "grab" asked for the left hand and for the right are two)
+struct Input {
+    XrSession session; XrAction action; XrPath subaction;
+    int hand = HAND_NOT_LOOKED;
+    bool kept = false; LONG kept_generation = 0;
+    XrActionStateBoolean b{}; XrActionStateFloat f{}; XrActionStateVector2f v{};   // the kept state, one of the three used
+};
 std::recursive_mutex g_mtx;
 std::map<XrSpace, Controller> g_controllers;   // every space made by xrCreateActionSpace
 std::map<XrSession, XrSpace> g_room;           // our own LOCAL space per session: the frame the kept poses live in
+std::map<std::pair<XrAction, XrPath>, Input> g_inputs;   // every action state the game has asked for (v3)
 
 // ---- pose maths (unit quaternions, metres) -----------------------------------------------------------------------
 XrQuaternionf qmul(XrQuaternionf a, XrQuaternionf b) {
@@ -124,23 +141,72 @@ int hand_of_path(XrPath path) {
     return HAND_UNKNOWN;
 }
 
-// sort a controller space into a hand, once it can be told (bindings exist only after the game syncs its actions)
-int hand_of(Controller& c) {
-    if (c.hand == HAND_LEFT || c.hand == HAND_RIGHT) return c.hand;
-    int hand = hand_of_path(c.subaction);
+// sort an action (a controller space's, or an input's) into a hand, once it can be told (bindings exist only after the
+// game syncs its actions): by the subaction path, else by where the action is bound
+int sort_hand(XrSession session, XrAction action, XrPath subaction) {
+    int hand = hand_of_path(subaction);
     if (hand == HAND_UNKNOWN && g_next_bound_sources != nullptr) {
         XrBoundSourcesForActionEnumerateInfo info{XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
-        info.action = c.action;
+        info.action = action;
         XrPath sources[16]{};
         uint32_t n = 0;
-        if (XR_SUCCEEDED(g_next_bound_sources(c.session, &info, 16, &n, sources)) && n > 0) {
+        if (XR_SUCCEEDED(g_next_bound_sources(session, &info, 16, &n, sources)) && n > 0) {
             int seen = hand_of_path(sources[0]);
             for (uint32_t i = 1; i < n && i < 16; ++i) if (hand_of_path(sources[i]) != seen) seen = HAND_UNKNOWN;
             hand = seen;
         }
     }
-    c.hand = hand;
     return hand;
+}
+
+int hand_of(Controller& c) {
+    if (c.hand == HAND_LEFT || c.hand == HAND_RIGHT) return c.hand;
+    return c.hand = sort_hand(c.session, c.action, c.subaction);
+}
+
+// is this hand held under `mask` (HAND_FREEZE_LEFT / _RIGHT bits)? a hand that cannot be told: only with both
+bool wanted_hand(int hand, LONG mask) {
+    const LONG both = HAND_FREEZE_LEFT | HAND_FREEZE_RIGHT;
+    return hand == HAND_LEFT ? (mask & HAND_FREEZE_LEFT) != 0 : hand == HAND_RIGHT ? (mask & HAND_FREEZE_RIGHT) != 0 : (mask & both) == both;
+}
+
+LONG generation_of(int hand) {
+    auto* s = shared();
+    return hand == HAND_LEFT ? s->generation_left : hand == HAND_RIGHT ? s->generation_right : s->generation_left * 65536 + s->generation_right;
+}
+
+// v3: which hands' buttons are held right now; 0 = none
+LONG buttons_now() {
+    auto* s = shared();
+    return s == nullptr ? 0 : s->buttons;
+}
+
+// The held answer for an action state. `live` is the runtime's answer this call; on the first ask after a freeze it is
+// kept (if the action is active) and passed through, every later ask gets the kept state back with "not changed".
+template <class T>
+void held_input(XrSession session, const XrActionStateGetInfo* info, T& live, T Input::*slot) {
+    std::lock_guard _{g_mtx};
+    const LONG mask = buttons_now();
+    if (mask == 0 || info == nullptr) return;
+    auto& in = g_inputs[{info->action, info->subactionPath}];
+    if (in.session == XR_NULL_HANDLE) { in.session = session; in.action = info->action; in.subaction = info->subactionPath; }
+    if (in.hand != HAND_LEFT && in.hand != HAND_RIGHT) in.hand = sort_hand(session, info->action, info->subactionPath);
+    if (!wanted_hand(in.hand, mask)) return;
+    const LONG generation = generation_of(in.hand);
+    if (in.kept && in.kept_generation != generation) in.kept = false;   // a new freeze: fresh state
+    if (!in.kept) {
+        if (!live.isActive) return;   // nothing to keep yet (the controller is asleep or not bound)
+        in.*slot = live;
+        in.kept = true;
+        in.kept_generation = generation;
+        InterlockedIncrement(&shared()->inputs_held);
+        return;   // the first answer is the live one, the same one we keep
+    }
+    T out = in.*slot;
+    out.type = live.type;
+    out.next = live.next;
+    out.changedSinceLastSync = XR_FALSE;
+    live = out;
 }
 
 // The held answer for "controller `space` relative to `base`" at `time`. False = answer live (not a controller, the
@@ -152,12 +218,9 @@ bool held_pose(XrSpace space, XrSpace base, XrTime time, LONG mask, XrPosef& out
     auto r = g_room.find(c->second.session);
     if (r == g_room.end()) return false;
     const int hand = hand_of(c->second);
-    const LONG both = HAND_FREEZE_LEFT | HAND_FREEZE_RIGHT;
-    const bool wanted = hand == HAND_LEFT ? (mask & HAND_FREEZE_LEFT) != 0 : hand == HAND_RIGHT ? (mask & HAND_FREEZE_RIGHT) != 0 : (mask & both) == both;
-    if (!wanted) return false;
+    if (!wanted_hand(hand, mask)) return false;
     auto* s = shared();
-    const LONG generation = hand == HAND_LEFT ? s->generation_left : hand == HAND_RIGHT ? s->generation_right
-                                              : s->generation_left * 65536 + s->generation_right;
+    const LONG generation = generation_of(hand);
     if (c->second.kept && c->second.kept_generation != generation) c->second.kept = false;   // a new freeze: fresh pose
     if (!c->second.kept) {
         XrSpaceLocation now{XR_TYPE_SPACE_LOCATION};
@@ -208,8 +271,28 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrDestroySession(XrSession session) {
         for (auto it = g_controllers.begin(); it != g_controllers.end();) {
             if (it->second.session == session) it = g_controllers.erase(it); else ++it;
         }
+        for (auto it = g_inputs.begin(); it != g_inputs.end();) {
+            if (it->second.session == session) it = g_inputs.erase(it); else ++it;
+        }
     }
     return g_next_destroy_session(session);
+}
+
+// v3: the three action-state asks; the runtime answers first, then the kept state replaces the answer while held
+XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo* info, XrActionStateBoolean* state) {
+    const XrResult r = g_next_state_bool(session, info, state);
+    if (XR_SUCCEEDED(r) && state != nullptr) held_input(session, info, *state, &Input::b);
+    return r;
+}
+XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo* info, XrActionStateFloat* state) {
+    const XrResult r = g_next_state_float(session, info, state);
+    if (XR_SUCCEEDED(r) && state != nullptr) held_input(session, info, *state, &Input::f);
+    return r;
+}
+XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetActionStateVector2f(XrSession session, const XrActionStateGetInfo* info, XrActionStateVector2f* state) {
+    const XrResult r = g_next_state_vec2(session, info, state);
+    if (XR_SUCCEEDED(r) && state != nullptr) held_input(session, info, *state, &Input::v);
+    return r;
 }
 
 void zero_velocity(XrSpaceVelocity* v) { v->linearVelocity = {0, 0, 0}; v->angularVelocity = {0, 0, 0}; }
@@ -265,6 +348,9 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetInstanceProcAddr(XrInstance instance, con
         {"xrLocateSpace", (PFN_xrVoidFunction)hf_xrLocateSpace, (PFN_xrVoidFunction*)&g_next_locate_space},
         {"xrLocateSpaces", (PFN_xrVoidFunction)hf_xrLocateSpaces, (PFN_xrVoidFunction*)&g_next_locate_spaces},
         {"xrLocateSpacesKHR", (PFN_xrVoidFunction)hf_xrLocateSpacesKHR, (PFN_xrVoidFunction*)&g_next_locate_spaces_khr},
+        {"xrGetActionStateBoolean", (PFN_xrVoidFunction)hf_xrGetActionStateBoolean, (PFN_xrVoidFunction*)&g_next_state_bool},
+        {"xrGetActionStateFloat", (PFN_xrVoidFunction)hf_xrGetActionStateFloat, (PFN_xrVoidFunction*)&g_next_state_float},
+        {"xrGetActionStateVector2f", (PFN_xrVoidFunction)hf_xrGetActionStateVector2f, (PFN_xrVoidFunction*)&g_next_state_vec2},
     };
     for (const auto& h : hooks) {
         if (std::strcmp(name, h.name) == 0) { *h.next = *function; *function = h.ours; break; }

@@ -31,6 +31,11 @@ for you and `/lanes:update` says when a newer one is out.
    show which hands it has told apart.
 4. Pick the seconds, press a row's snowflake, hold still. The flame lets that row's hands go. **ALWAYS ON TOP**
    keeps the window above the game.
+5. **BUTTONS TOO** (the tick box under the title, v3): a freeze then also holds what the fingers are doing on
+   those controllers: a trigger pulled (or half-pulled), a grip squeezed, a stick pushed, a button held. Tick it,
+   press a snowflake, hold the buttons the way the pose needs them until the countdown ends, then let go of
+   everything: the game keeps seeing them held. The row says *FROZEN+BUTTONS*. The flame releases the buttons with
+   the hands.
 
 Switch it **OFF** when you do not need it. While it is on but nothing is frozen it only passes the
 game's calls through; while it is off it is not loaded at all.
@@ -54,14 +59,19 @@ powershell -ExecutionPolicy Bypass -File install.ps1  (to %LOCALAPPDATA%\Program
   pose and where X is right now, so a game that asks relative to the head sees the hands stay in the
   room as the head moves (not glued to the face). Velocities are zeroed so nothing reads a swing.
   Covers `xrLocateSpace`, `xrLocateSpaces` and `xrLocateSpacesKHR`.
+- **Buttons too (v3):** the same layer also sits on `xrGetActionStateBoolean`, `xrGetActionStateFloat` and
+  `xrGetActionStateVector2f`, which is how an OpenXR game reads every button, trigger, grip and stick. With a
+  hand's buttons held, the first answer after the freeze is kept and every later ask gets that answer back, marked
+  "not changed". An action is sorted into a hand like a space (its subaction path, else its bindings); one bound
+  to both hands is held only by **BOTH**. Pose actions (`xrGetActionStatePose`) are left alone.
 - `app/HandFreeze.cs` starts the app and holds the switch logic; `app/FreezeUi.cs` draws the window by
   hand onto a 240 x 356 canvas and scales it up with hard pixel edges. The backgrounds come from
   `app/make_backgrounds.py` (two looping GIFs); the font is Silkscreen, a pixel font drawn only at its own sizes so letters never run together. All three are
   embedded in the exe. **ON** writes the layer's manifest next to the DLL and
   registers it under `HKCU\Software\Khronos\OpenXR\1\ApiLayers\Implicit` (this Windows user only, no
-  admin); **OFF** removes that entry. Freeze/unfreeze go through a 180-byte shared-memory block
-  (`shared.h`): a left/right bit mask and a counter per hand, so a newly frozen hand takes a fresh pose
-  while one already frozen keeps its own. The layer also reports which game is connected.
+  admin); **OFF** removes that entry. Freeze/unfreeze go through a 188-byte shared-memory block
+  (`shared.h`): a left/right bit mask for the hands, another for their buttons, and a counter per hand, so a newly
+  frozen hand takes a fresh pose (and fresh button states) while one already frozen keeps its own. The layer also reports which game is connected.
 - **Which hand is which:** each controller space is sorted once, by the subaction path it was made with
   (`/user/hand/left` or `/right`), else by where its action is bound (`xrEnumerateBoundSourcesForAction`).
   A space whose hand cannot be told is held only by **BOTH**.
@@ -86,7 +96,12 @@ headset or a real game.**
 - **OpenXR games only.** A game that talks to SteamVR's own OpenVR API (many older VR games, and
   REFramework when set to OpenVR) does not go through OpenXR layers. Our own mods can freeze their
   hands themselves (Visceral RE2 has a tick box for it since b169).
-- **64-bit games only** for now; a 32-bit OpenXR game would need a 32-bit build of the layer.
+- **64-bit games only** for now, and **a 32-bit OpenXR game will not start while the switch is ON** (seen with
+  Manhunt on 2026-10-14): the layer is registered for this Windows user, where 32-bit and 64-bit loaders read the
+  same list, and a 32-bit loader that cannot load a 64-bit DLL fails the whole game. Switch Hand Freeze OFF before a
+  32-bit game, or set `DISABLE_HAND_FREEZE_LAYER=1` for that game. The real fix (a 32-bit build registered where only
+  32-bit loaders look, or a per-machine registration) is on the list.
+- **Buttons too** is new (v3, 2026-10-14) and has only been compiled, not yet tried in a game or on the simulator.
 - Hand tracking (finger tracking without controllers) is not held, only controller poses.
 
 ## Credit

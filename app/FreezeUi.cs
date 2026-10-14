@@ -28,6 +28,7 @@ class FreezeUi : Form {
     const int ROW_Y0 = 114, ROW_H = 72, LABEL_X = 10, FLAKE_X = 122, FLAME_X = 196, FLAKE_R = 28;
     const int FLAME_DROP = 5;                   // the flame sits a little low, so its tall tongues stay inside the row
     const int STATUS_Y = 339, PIN_W = 78;
+    const int BUTTONS_X = 12, BUTTONS_Y = 60, BOX = 10;   // v3: the BUTTONS TOO tick box, in the header where the OFF hint sits
     const int FRAME_MS = 140;               // background frame time (make_backgrounds.py FRAME_MS)
     const int FADE_MS = 500;                // red <-> green switch fade
     const int DEFAULT_SECONDS = 10, MAX_SECONDS = 60;
@@ -53,6 +54,7 @@ class FreezeUi : Form {
     DateTime lastTick = DateTime.Now;
     int seconds = DEFAULT_SECONDS;
     bool pinned;
+    bool buttonsToo;            // v3: a freeze also holds the buttons, triggers, grips and sticks of those hands
     int countdownHands;         // which hands the running countdown will freeze; 0 = none
     DateTime countdownEnd;
     int lastBeep = -1;
@@ -128,9 +130,10 @@ class FreezeUi : Form {
             int v;
             if (lines.Length > 0 && int.TryParse(lines[0].Trim(), out v) && v >= 0 && v <= MAX_SECONDS) seconds = v;
             pinned = lines.Length > 1 && lines[1].Trim() == "pinned";
+            buttonsToo = lines.Length > 2 && lines[2].Trim() == "buttons";
         } catch { }
     }
-    void SaveSettings() { try { File.WriteAllLines(settingsFile, new[] { seconds.ToString(), pinned ? "pinned" : "free" }); } catch { } }
+    void SaveSettings() { try { File.WriteAllLines(settingsFile, new[] { seconds.ToString(), pinned ? "pinned" : "free", buttonsToo ? "buttons" : "hands only" }); } catch { } }
 
     // ---- behaviour -------------------------------------------------------------------------------------------------
     void Step() {
@@ -142,7 +145,7 @@ class FreezeUi : Form {
         if (countdownHands != 0) {
             double left = (countdownEnd - now).TotalSeconds;
             if (left <= 0) {
-                shared.Freeze(countdownHands);
+                shared.Freeze(countdownHands, buttonsToo);
                 countdownHands = 0;
                 Beep(FROZEN_HZ, FROZEN_MS);
             } else {
@@ -157,6 +160,7 @@ class FreezeUi : Form {
         if (what == "switch") { Toggle(); return; }
         if (what == "pin") { pinned = !pinned; TopMost = pinned; SaveSettings(); return; }
         if (!on) return;
+        if (what == "buttons") { buttonsToo = !buttonsToo; SaveSettings(); return; }
         if (what == "minus") { SetSeconds(seconds - 1); return; }
         if (what == "plus") { SetSeconds(seconds + 1); return; }
         foreach (var r in Rows) {
@@ -192,6 +196,7 @@ class FreezeUi : Form {
         float x = screen.X / (float)scale, y = screen.Y / (float)scale;
         if (Dist(x, y, SWITCH_X, SWITCH_Y) <= SWITCH_R) return "switch";
         if (new RectangleF(CANVAS_W - 6 - PIN_W, STATUS_Y - 4, PIN_W, 15).Contains(x, y)) return "pin";
+        if (on && new RectangleF(BUTTONS_X - 2, BUTTONS_Y - 3, 120, 16).Contains(x, y)) return "buttons";
         if (new RectangleF(MINUS_X, SECONDS_Y - 3, ARROW_W, BOX_H).Contains(x, y)) return "minus";
         if (new RectangleF(PLUS_X, SECONDS_Y - 3, ARROW_W, BOX_H).Contains(x, y)) return "plus";
         foreach (var r in Rows) {
@@ -264,6 +269,13 @@ class FreezeUi : Form {
         Say(g, "HAND", BIG, 12, 9, Paper);
         Say(g, "FREEZE", BIG, 12, 26, Lighter(Ice, 0.3f));
         if (!on) Say(g, "Switch on before the game starts.", SMALL, 12, 63, Paper);   // the one hint (Tefa, 2026-10-13)
+        else {   // v3: the tick box takes the hint's place while on
+            Color tickWord = hover == "buttons" ? Lighter(Ice, 0.4f) : Paper;
+            using (var b = new SolidBrush(Ink)) g.FillRectangle(b, BUTTONS_X, BUTTONS_Y, BOX, BOX);
+            using (var p = new Pen(tickWord)) g.DrawRectangle(p, BUTTONS_X, BUTTONS_Y, BOX - 1, BOX - 1);
+            if (buttonsToo) using (var b = new SolidBrush(Green)) g.FillRectangle(b, BUTTONS_X + 2, BUTTONS_Y + 2, BOX - 4, BOX - 4);
+            Say(g, "BUTTONS TOO", SMALL, BUTTONS_X + BOX + 5, BUTTONS_Y + 1, tickWord);
+        }
         // the round switch
         Color c = Mix(Red, Green, fade);
         bool hot = hover == "switch", down = pressed == "switch";
@@ -295,13 +307,14 @@ class FreezeUi : Form {
     void DrawRow(Graphics g, Row r) {
         int cy = r.Y + ROW_H / 2 - 2;
         bool frozen = (shared.Frozen & r.Hands) == r.Hands;
+        bool buttons = frozen && (shared.ButtonsFrozen & r.Hands) == r.Hands;
         bool counting = countdownHands == r.Hands;
         Panel(g, 4, r.Y, CANVAS_W - 8, ROW_H - 4);
         if (frozen) using (var b = new SolidBrush(Color.FromArgb(90, Ice))) g.FillRectangle(b, 5, r.Y + 1, CANVAS_W - 10, ROW_H - 6);
         Color word = frozen ? Ice : (on ? Paper : Grey(Paper));
         Say(g, r.Label, BIG, LABEL_X, cy - 24, word);   // two lines: LEFT / HAND, so the words stay big and clear
         Say(g, r.Noun, BIG, LABEL_X, cy - 9, word);
-        Say(g, frozen ? "FROZEN" : counting ? "HOLD STILL" : "", SMALL, LABEL_X, cy + 10, frozen ? Ice : FlameIn);
+        Say(g, buttons ? "FROZEN+BUTTONS" : frozen ? "FROZEN" : counting ? "HOLD STILL" : "", SMALL, LABEL_X, cy + 10, frozen ? Ice : FlameIn);
         string flakeId = "freeze" + r.Hands, flameId = "unfreeze" + r.Hands;
         DrawSnowflake(g, FLAKE_X, cy + (pressed == flakeId ? 1 : 0), hover == flakeId);
         string inside = counting ? Math.Max(1, (int)Math.Ceiling((countdownEnd - DateTime.Now).TotalSeconds)).ToString() : "FREEZE";
