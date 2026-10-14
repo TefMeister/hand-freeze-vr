@@ -35,10 +35,10 @@ static class Program {
 static class Hands { public const int LEFT = 1, RIGHT = 2, BOTH = 3; }
 
 class Shared : IDisposable {
-    const string NAME = @"Local\FlatToVR_HandFreeze_v2";
-    const uint MAGIC = 0x5A465248, VERSION = 2;
-    const int SIZE = 180, FROZEN = 8, GEN_LEFT = 12, HEARTBEAT = 16, CONTROLLERS = 28, GAME_NAME = 40,
-              GEN_RIGHT = 168, LEFT_SPACES = 172, RIGHT_SPACES = 176;
+    const string NAME = @"Local\FlatToVR_HandFreeze_v3";
+    const uint MAGIC = 0x5A465248, VERSION = 3;
+    const int SIZE = 188, FROZEN = 8, GEN_LEFT = 12, HEARTBEAT = 16, CONTROLLERS = 28, GAME_NAME = 40,
+              GEN_RIGHT = 168, LEFT_SPACES = 172, RIGHT_SPACES = 176, BUTTONS = 180, INPUTS_HELD = 184;
     const ulong CONNECTED_WITHIN_MS = 3000;   // a game counts as connected if the layer was heard from this recently
     readonly MemoryMappedFile file;
     readonly MemoryMappedViewAccessor view;
@@ -51,12 +51,15 @@ class Shared : IDisposable {
         if (view.ReadUInt32(0) != MAGIC) { view.Write(4, VERSION); view.Write(0, MAGIC); }
     }
     public int Frozen { get { return view.ReadInt32(FROZEN); } }
-    public void Freeze(int hands) {
+    public int ButtonsFrozen { get { return view.ReadInt32(BUTTONS); } }   // v3: hands whose buttons are held too
+    public int InputsHeld { get { return view.ReadInt32(INPUTS_HELD); } }
+    public void Freeze(int hands, bool buttonsToo) {
         if ((hands & Hands.LEFT) != 0) view.Write(GEN_LEFT, view.ReadInt32(GEN_LEFT) + 1);   // fresh poses for these hands
         if ((hands & Hands.RIGHT) != 0) view.Write(GEN_RIGHT, view.ReadInt32(GEN_RIGHT) + 1);
+        view.Write(BUTTONS, buttonsToo ? ButtonsFrozen | hands : ButtonsFrozen & ~hands);   // before the poses: one freeze, both taken at the same generation
         view.Write(FROZEN, Frozen | hands);
     }
-    public void Unfreeze(int hands) { view.Write(FROZEN, Frozen & ~hands); }
+    public void Unfreeze(int hands) { view.Write(FROZEN, Frozen & ~hands); view.Write(BUTTONS, ButtonsFrozen & ~hands); }
     public int Controllers { get { return view.ReadInt32(CONTROLLERS); } }
     public int LeftSpaces { get { return view.ReadInt32(LEFT_SPACES); } }
     public int RightSpaces { get { return view.ReadInt32(RIGHT_SPACES); } }
@@ -88,7 +91,7 @@ static class Layer {
     public static void TurnOn() {
         // the manifest names the DLL by its full path, so it works wherever the folder was put
         string json = "{\n  \"file_format_version\": \"1.0.0\",\n  \"api_layer\": {\n    \"name\": \"" + LAYER_NAME + "\",\n" +
-            "    \"library_path\": \"" + Dll.Replace("\\", "\\\\") + "\",\n    \"api_version\": \"1.0\",\n    \"implementation_version\": \"2\",\n" +
+            "    \"library_path\": \"" + Dll.Replace("\\", "\\\\") + "\",\n    \"api_version\": \"1.0\",\n    \"implementation_version\": \"3\",\n" +
             "    \"description\": \"Hand Freeze: holds the controllers still on request, from the Hand Freeze app\",\n" +
             "    \"disable_environment\": \"DISABLE_HAND_FREEZE_LAYER\"\n  }\n}\n";
         File.WriteAllText(Manifest, json);

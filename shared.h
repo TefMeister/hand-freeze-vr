@@ -3,14 +3,16 @@
 // and writes it by the byte offsets in the comments, so the layout must never change without bumping
 // HAND_FREEZE_VERSION and the mapping name together.
 // v2 (2026-10-13): LEFT, RIGHT and BOTH rows in the app, so `frozen` is a bit mask and each hand has its own generation.
+// v3 (2026-10-14): `buttons`, the hands whose buttons, triggers, grips and sticks are held too (Tefa: "Hand Freeze needs
+// the ability to freeze button presses holds as well"); the layer counts the input states it took in `inputs_held`.
 #pragma once
 #include <windows.h>
 #include <cstdint>
 
-#define HAND_FREEZE_MAPPING_NAME L"Local\\FlatToVR_HandFreeze_v2"
+#define HAND_FREEZE_MAPPING_NAME L"Local\\FlatToVR_HandFreeze_v3"
 #define HAND_FREEZE_MAGIC 0x5A465248u   // "HRFZ"
-#define HAND_FREEZE_VERSION 2u
-#define HAND_FREEZE_SIZE 180            // bytes; the app maps exactly this much (HandFreeze.cs SIZE)
+#define HAND_FREEZE_VERSION 3u
+#define HAND_FREEZE_SIZE 188            // bytes; the app maps exactly this much (HandFreeze.cs SIZE)
 #define HAND_FREEZE_LEFT 1              // bits of `frozen`
 #define HAND_FREEZE_RIGHT 2
 
@@ -29,6 +31,8 @@ struct HandFreezeShared {
     volatile LONG generation_right;  // 168  app: the same for the right hand
     volatile LONG left_spaces;       // 172  layer: controller spaces known to be the left hand
     volatile LONG right_spaces;      // 176  layer: ... the right hand (the rest: hand not known, held only with BOTH)
-};                                   // 180 bytes
+    volatile LONG buttons;           // 180  app: the hands (same bits) whose buttons, triggers, grips and sticks are held too
+    volatile LONG inputs_held;       // 184  layer: input states taken since the layer loaded (rises at each buttons freeze)
+};                                   // 188 bytes
 #pragma pack(pop)
 static_assert(sizeof(HandFreezeShared) == HAND_FREEZE_SIZE, "the app reads this layout by offset");
