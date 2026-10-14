@@ -386,6 +386,11 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrCreateApiLayerInstance(const XrInstanceCreat
 
 } // namespace
 
+// 32-bit build (v3.1): XRAPI_CALL is __stdcall there, which decorates the export to _xrNegotiate...@12, and the loader then
+// says "negotiation function xrNegotiateLoaderApiLayerInterface was not found" (seen 2026-10-14). Export the plain name too.
+#if defined(_M_IX86)
+#pragma comment(linker, "/EXPORT:xrNegotiateLoaderApiLayerInterface=_xrNegotiateLoaderApiLayerInterface@12")
+#endif
 extern "C" __declspec(dllexport) XrResult XRAPI_CALL xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loader_info, const char* /*layer_name*/, XrNegotiateApiLayerRequest* request) {
     if (loader_info == nullptr || request == nullptr || loader_info->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||
         request->structType != XR_LOADER_INTERFACE_STRUCT_API_LAYER_REQUEST ||

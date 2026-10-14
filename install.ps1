@@ -7,8 +7,8 @@ if ($From -eq "") { $From = if (Test-Path (Join-Path $PSScriptRoot "dist\HandFre
 $ErrorActionPreference = "Stop"
 $to = Join-Path $env:LOCALAPPDATA "Programs\HandFreeze"
 New-Item -ItemType Directory -Force $to | Out-Null
-foreach ($f in "HandFreeze.exe", "hand_freeze_layer.dll", "hand_freeze.ico") {
-    Copy-Item (Join-Path $From $f) (Join-Path $to $f) -Force
+foreach ($f in "HandFreeze.exe", "hand_freeze_layer.dll", "hand_freeze_layer32.dll", "hand_freeze.ico") {
+    if (Test-Path (Join-Path $From $f)) { Copy-Item (Join-Path $From $f) (Join-Path $to $f) -Force }   # the 32-bit layer is new in v3.1
 }
 $shell = New-Object -ComObject WScript.Shell
 $lnk = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Desktop")) "Hand Freeze.lnk"))
