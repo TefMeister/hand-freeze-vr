@@ -96,12 +96,15 @@ headset or a real game.**
 - **OpenXR games only.** A game that talks to SteamVR's own OpenVR API (many older VR games, and
   REFramework when set to OpenVR) does not go through OpenXR layers. Our own mods can freeze their
   hands themselves (Visceral RE2 has a tick box for it since b169).
-- **64-bit games only** for now, and **a 32-bit OpenXR game will not start while the switch is ON** (seen with
-  Manhunt on 2026-10-14): the layer is registered for this Windows user, where 32-bit and 64-bit loaders read the
-  same list, and a 32-bit loader that cannot load a 64-bit DLL fails the whole game. Switch Hand Freeze OFF before a
-  32-bit game, or set `DISABLE_HAND_FREEZE_LAYER=1` for that game. The real fix (a 32-bit build registered where only
-  32-bit loaders look, or a per-machine registration) is on the list.
-- **Buttons too** is new (v3, 2026-10-14) and has only been compiled, not yet tried in a game or on the simulator.
+- **32-bit games (fixed in v3.1, 2026-10-14).** Up to v3 a 32-bit OpenXR game would not start while the switch was
+  ON (seen with Manhunt): the layer list is per Windows user, read by 32-bit and 64-bit games alike, and a game whose
+  loader can load none of the listed layers fails to start. Since v3.1 **ON** registers a 32-bit copy of the layer
+  (`hand_freeze_layer32.dll`) beside the 64-bit one; each game loads the copy of its own size and skips the other with
+  a warning, which the OpenXR loader allows as long as one layer loads. `test/instance_test.c` proves it: built as a
+  32-bit and a 64-bit program, each asks the loader for an instance with both copies registered
+  `[verified-numerically 2026-10-14, n=1 each]`; with only the 64-bit copy the 32-bit one failed exactly like Manhunt.
+- **Buttons too** is new (v3, 2026-10-14): compiled, and the layer still loads and holds both hands on the simulator with
+  it in; the button hold itself has not yet been tried in a game.
 - Hand tracking (finger tracking without controllers) is not held, only controller poses.
 
 ## Credit

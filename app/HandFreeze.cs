@@ -81,6 +81,12 @@ static class Layer {
     static string Dir { get { return AppDomain.CurrentDomain.BaseDirectory; } }
     public static string Dll { get { return Path.Combine(Dir, "hand_freeze_layer.dll"); } }
     public static string Manifest { get { return Path.Combine(Dir, "hand_freeze_layer.json"); } }
+    // v3.1 (2026-10-14): a 32-bit copy of the layer, registered beside the 64-bit one. The per-user layer list is read by
+    // 32-bit and 64-bit games alike, and a game whose loader can load NO layer from the list fails to start (a 32-bit
+    // Manhunt did, 2026-10-14). The loader forgives a layer it cannot load as long as another one loads, so each game
+    // loads the copy of its own size and skips the other with a warning.
+    public static string Dll32 { get { return Path.Combine(Dir, "hand_freeze_layer32.dll"); } }
+    public static string Manifest32 { get { return Path.Combine(Dir, "hand_freeze_layer32.json"); } }
 
     public static bool IsOn() {
         using (var k = Registry.CurrentUser.OpenSubKey(KEY)) {
@@ -88,16 +94,24 @@ static class Layer {
             return v is int && (int)v == 0;
         }
     }
-    public static void TurnOn() {
+    static string ManifestText(string name, string dll, string bits) {
         // the manifest names the DLL by its full path, so it works wherever the folder was put
-        string json = "{\n  \"file_format_version\": \"1.0.0\",\n  \"api_layer\": {\n    \"name\": \"" + LAYER_NAME + "\",\n" +
-            "    \"library_path\": \"" + Dll.Replace("\\", "\\\\") + "\",\n    \"api_version\": \"1.0\",\n    \"implementation_version\": \"3\",\n" +
-            "    \"description\": \"Hand Freeze: holds the controllers still on request, from the Hand Freeze app\",\n" +
+        return "{\n  \"file_format_version\": \"1.0.0\",\n  \"api_layer\": {\n    \"name\": \"" + name + "\",\n" +
+            "    \"library_path\": \"" + dll.Replace("\\", "\\\\") + "\",\n    \"api_version\": \"1.0\",\n    \"implementation_version\": \"3\",\n" +
+            "    \"description\": \"Hand Freeze (" + bits + "): holds the controllers still on request, from the Hand Freeze app\",\n" +
             "    \"disable_environment\": \"DISABLE_HAND_FREEZE_LAYER\"\n  }\n}\n";
-        File.WriteAllText(Manifest, json);
-        using (var k = Registry.CurrentUser.CreateSubKey(KEY)) k.SetValue(Manifest, 0, RegistryValueKind.DWord);
+    }
+    public static void TurnOn() {
+        File.WriteAllText(Manifest, ManifestText(LAYER_NAME, Dll, "64-bit"));
+        using (var k = Registry.CurrentUser.CreateSubKey(KEY)) {
+            k.SetValue(Manifest, 0, RegistryValueKind.DWord);
+            if (File.Exists(Dll32)) {
+                File.WriteAllText(Manifest32, ManifestText(LAYER_NAME + "32", Dll32, "32-bit"));
+                k.SetValue(Manifest32, 0, RegistryValueKind.DWord);
+            } else k.DeleteValue(Manifest32, false);
+        }
     }
     public static void TurnOff() {
-        using (var k = Registry.CurrentUser.OpenSubKey(KEY, true)) if (k != null) k.DeleteValue(Manifest, false);
+        using (var k = Registry.CurrentUser.OpenSubKey(KEY, true)) if (k != null) { k.DeleteValue(Manifest, false); k.DeleteValue(Manifest32, false); }
     }
 }

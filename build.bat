@@ -10,10 +10,16 @@ if not exist "%VCVARS%" (echo Visual Studio Build Tools not found & exit /b 1)
 call "%VCVARS%" >nul
 if not exist "%HERE%dist" mkdir "%HERE%dist"
 if not exist "%HERE%build" mkdir "%HERE%build"
+if not exist "%HERE%build\x86" mkdir "%HERE%build\x86"
 
 cl /nologo /O2 /EHsc /std:c++17 /LD /MT /W4 /I"%HERE%third_party" "%HERE%layer\hand_freeze_layer.cpp" ^
    /Fo"%HERE%build\\" /Fe"%HERE%dist\hand_freeze_layer.dll" /link /NOLOGO /IMPLIB:"%HERE%build\hand_freeze_layer.lib"
 if errorlevel 1 (echo LAYER BUILD FAILED & exit /b 1)
+
+rem v3.1: a 32-bit copy of the layer for 32-bit OpenXR games (built in its own shell, so the 64-bit tools above stay)
+set "VCVARS32=%VCVARS:vcvars64=vcvars32%"
+cmd /c "call "%VCVARS32%" >nul && cl /nologo /O2 /EHsc /std:c++17 /LD /MT /W4 /I"%HERE%third_party" "%HERE%layer\hand_freeze_layer.cpp" /Fo"%HERE%build\x86\\" /Fe"%HERE%dist\hand_freeze_layer32.dll" /link /NOLOGO /IMPLIB:"%HERE%build\x86\hand_freeze_layer32.lib""
+if errorlevel 1 (echo 32-BIT LAYER BUILD FAILED & exit /b 1)
 
 "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /win32icon:"%HERE%app\hand_freeze.ico" ^
    /resource:"%HERE%app\summer.gif",summer.gif /resource:"%HERE%app\winter.gif",winter.gif ^
