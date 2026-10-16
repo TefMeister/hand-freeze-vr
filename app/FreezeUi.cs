@@ -78,6 +78,7 @@ class FreezeUi : Form {
         face = LoadFont("Silkscreen-Regular.ttf");
         summer = LoadFrames("summer.gif");
         winter = LoadFrames("winter.gif");
+        Layer.Mend();   // v3.2: a stale registration (ON pressed before v3.1 was installed) is re-done here
         on = Layer.IsOn();
         fade = on ? 1 : 0;
         LoadSettings();

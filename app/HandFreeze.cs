@@ -7,8 +7,9 @@
 // rows for LEFT, RIGHT and BOTH, a pixel font, all pixelated.
 //
 // ON/OFF registers the OpenXR layer (hand_freeze_layer.dll, next to this exe) for every OpenXR game of this Windows user
-// (HKCU, no admin). A game picks it up when it starts, so the switch has to be on before the game starts; the window can
-// be opened and closed at any time. FREEZE counts down, then tells the layer which hands to hold; UNFREEZE lets them go.
+// (HKCU, no admin), and since v3.1 a 32-bit copy beside it, so 32-bit games start too; since v3.2 the registration is
+// checked against the files and mended each time the app opens (Layer.Mend). A game picks the layer up when it starts,
+// so the switch has to be on before the game starts; the window can be opened and closed at any time. FREEZE counts down, then tells the layer which hands to hold; UNFREEZE lets them go.
 // Closing the window always unfreezes. The switch is the shared-memory block of ../shared.h (offsets below match it).
 using System;
 using System.IO;
@@ -113,5 +114,20 @@ static class Layer {
     }
     public static void TurnOff() {
         using (var k = Registry.CurrentUser.OpenSubKey(KEY, true)) if (k != null) { k.DeleteValue(Manifest, false); k.DeleteValue(Manifest32, false); }
+    }
+    // v3.2 (2026-10-16): the registration is checked against the files each time the app opens, and mended. A PC where
+    // ON had been pressed before v3.1 was installed kept only the 64-bit copy registered, so its 32-bit OpenXR games
+    // still failed to start (Hard Reset's own no-game test showed it, 2026-10-16); pressing OFF and ON again was the
+    // cure, and nothing said so. Mend() does that press when the registered set does not match the files present.
+    public static bool Mend() {
+        if (!IsOn()) return false;
+        bool fine;
+        using (var k = Registry.CurrentUser.OpenSubKey(KEY)) {
+            bool want32 = File.Exists(Dll32), has32 = k != null && k.GetValue(Manifest32) is int && File.Exists(Manifest32);
+            fine = want32 == has32 && File.Exists(Manifest);
+        }
+        if (fine) return false;
+        TurnOn();
+        return true;
     }
 }
