@@ -103,6 +103,12 @@ headset or a real game.**
   a warning, which the OpenXR loader allows as long as one layer loads. `test/instance_test.c` proves it: built as a
   32-bit and a 64-bit program, each asks the loader for an instance with both copies registered
   `[verified-numerically 2026-10-14, n=1 each]`; with only the 64-bit copy the 32-bit one failed exactly like Manhunt.
+  **v3.2 (2026-10-16) mends an old registration.** A PC where **ON** had been pressed before v3.1 was installed kept
+  only the 64-bit copy registered, so its 32-bit games still failed (Hard Reset's own no-game test showed it on the
+  dev PC, 2026-10-16, with the game's loader 1.0.10; with both copies registered the same test ran
+  `[verified-numerically 2026-10-16, n=1]`). Pressing OFF and ON again was the cure, and nothing said so. Since v3.2
+  the app checks the registration against the files beside it each time it opens and re-does the ON press when they
+  do not match. Nothing else changed.
 - **Buttons too** (v3, 2026-10-14) works in a real game: Visceral RE2 VR's hand tuning with the controllers on the desk
   (Tefa, 2026-10-14 23:00: "hand freeze with buttons is working!") `[verified-live 2026-10-14, n=1]`.
 - Hand tracking (finger tracking without controllers) is not held, only controller poses.
