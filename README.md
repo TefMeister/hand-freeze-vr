@@ -9,8 +9,9 @@ Press FREEZE, hold the controllers where you want the in-game hands, and when th
 shows in the snowflake, with a beep each second and a long beep at the end) those hands stay exactly
 there, fixed in the room, while the game keeps running and the headset keeps tracking. Put the
 controllers down, lean in, look at the hands from any side, move sliders with the mouse. UNFREEZE lets
-them follow again. Closing the window always unfreezes. A summer scene plays behind it while it is off,
-a frozen winter while it is on.
+them follow again. Closing the window always unfreezes. Behind it sits the app's own icon, still,
+the same on and off (until 2026-10-25 a summer scene played while off and a winter one while on; they came off to spare
+the headset).
 
 Made for tuning hand and finger poses in our VR mods (2026-10-13), where holding two controllers in
 one hand while dragging sliders on the monitor was the only way before.
@@ -71,8 +72,9 @@ powershell -ExecutionPolicy Bypass -File install.ps1  (to %LOCALAPPDATA%\Program
   to both hands is held only by **BOTH**. Pose actions (`xrGetActionStatePose`) are left alone.
 - `app/HandFreeze.cs` starts the app and holds the switch logic; `app/FreezeUi.cs` draws the window by
   hand onto a 240 x 356 canvas and scales it up with hard pixel edges. The backgrounds come from
-  `app/make_backgrounds.py` (two looping GIFs); the font is Silkscreen, a pixel font drawn only at its own sizes so letters never run together. All three are
-  embedded in the exe. **ON** writes the layer's manifest next to the DLL and
+  the app's icon, drawn once, faint (the old looping GIFs from `app/make_backgrounds.py` are no longer built in); the
+  font is Silkscreen, a pixel font drawn only at its own sizes so letters never run together, embedded in the exe. The
+  window is redrawn only when something on it changes. **ON** writes the layer's manifest next to the DLL and
   registers it under `HKCU\Software\Khronos\OpenXR\1\ApiLayers\Implicit` (this Windows user only, no
   admin); **OFF** removes that entry. Freeze/unfreeze go through a 208-byte shared-memory block
   (`shared.h`): a left/right bit mask for the hands, another for their buttons, and a counter per hand, so a newly

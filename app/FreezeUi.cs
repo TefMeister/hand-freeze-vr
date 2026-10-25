@@ -1,8 +1,11 @@
 // FreezeUi.cs -- the Hand Freeze window, drawn by hand onto a small canvas and scaled up with hard pixel edges, so the
 // whole window is pixel art (Tefa 2026-10-13: "if you can, make it look pixelated").
 //
-// Top: the title and a ROUND switch, red when OFF, fading smoothly to green when ON. Behind everything a looping
-// background: summer (summer.gif) while OFF, a frozen winter (winter.gif) while ON. Then the seconds picker, then three
+// Top: the title and a ROUND switch, red when OFF, green when ON. Behind everything a STILL picture: the app's own icon,
+// pixelated and faint, the same ON and OFF (2026-10-25, Tefa: "please make these windows as little performance hungry as they
+// can, we need to lose the animations and please make the hand freeze window also just have the icon on the background for
+// both on and off"; until then a looping summer scene while OFF and a winter one while ON, summer.gif / winter.gif, and a
+// flickering flame). The window is redrawn only when something on it changes. Then the seconds picker, then three
 // rows, LEFT HAND, RIGHT HAND and BOTH HANDS, each with a snowflake-shaped FREEZE button and a flame-shaped UN- / FREEZE
 // button. During a countdown the snowflake shows the seconds left; a frozen row's label turns icy. The font is Silkscreen
 // (a pixel font, SIL OFL), embedded in the exe with the two backgrounds. It is drawn only at its own pixel sizes, 8 and
@@ -31,8 +34,8 @@ class FreezeUi : Form {
     const int BUTTONS_X = 12, BUTTONS_Y = 60, BOX = 10;   // v3: the BUTTONS TOO tick box, in the header where the OFF hint sits
     const int BUTTONS_HIT_W = 86;
     const int STICK_X = 104, STICK_HIT_W = 128;          // v4: the R STICK CLICK tick box, beside it
-    const int FRAME_MS = 140;               // background frame time (make_backgrounds.py FRAME_MS)
-    const int FADE_MS = 500;                // red <-> green switch fade
+    const int STEP_MS = 100;                // how often the shared block is looked at (the window is redrawn only on a change)
+    const float PIC_STRENGTH = 0.30f;       // how faint the icon behind everything is
     const int DEFAULT_SECONDS = 10, MAX_SECONDS = 60;
     const int TICK_HZ = 880, TICK_MS = 70, FROZEN_HZ = 1320, FROZEN_MS = 350;   // the countdown beeps, the final one
 
@@ -44,16 +47,15 @@ class FreezeUi : Form {
     readonly Shared shared = new Shared();
     readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
     readonly Bitmap canvas = new Bitmap(CANVAS_W, CANVAS_H, PixelFormat.Format32bppArgb);
-    readonly List<Bitmap> summer, winter;
+    readonly Bitmap still;      // the background: the icon, pixelated and faint (2026-10-25)
+    string shownState = "";     // what the last drawing showed; a redraw only when it changes
     readonly PrivateFontCollection fonts = new PrivateFontCollection();
     readonly FontFamily face;
     readonly int scale;
     readonly string settingsFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
-    readonly DateTime started = DateTime.Now;
 
     bool on;
-    float fade;                 // 0 = red/summer, 1 = green/winter, eased towards `on`
-    DateTime lastTick = DateTime.Now;
+    float fade;                 // 0 = red (OFF), 1 = green (ON); no longer eased (no animation)
     int seconds = DEFAULT_SECONDS;
     bool pinned;
     bool buttonsToo;            // v3: a freeze also holds the buttons, triggers, grips and sticks of those hands
@@ -80,15 +82,14 @@ class FreezeUi : Form {
         ClientSize = new Size(CANVAS_W * scale, CANVAS_H * scale);
 
         face = LoadFont("Silkscreen-Regular.ttf");
-        summer = LoadFrames("summer.gif");
-        winter = LoadFrames("winter.gif");
+        still = MakeStill();
         Layer.Mend();   // v3.2: a stale registration (ON pressed before v3.1 was installed) is re-done here
         on = Layer.IsOn();
         fade = on ? 1 : 0;
         LoadSettings();
         TopMost = pinned;
 
-        tick.Interval = 40;
+        tick.Interval = STEP_MS;
         tick.Tick += (s, e) => Step();
         tick.Start();
         MouseMove += (s, e) => { string h = HitTest(e.Location); if (h != hover) { hover = h; Cursor = h != "" ? Cursors.Hand : Cursors.Default; Invalidate(); } };
@@ -115,19 +116,39 @@ class FreezeUi : Form {
         } catch { return new FontFamily("Candara"); }
     }
 
-    static List<Bitmap> LoadFrames(string name) {
-        var list = new List<Bitmap>();
-        try {
-            using (var s = Resource(name))
-            using (var gif = Image.FromStream(s)) {
-                var dim = new FrameDimension(gif.FrameDimensionsList[0]);
-                int n = gif.GetFrameCount(dim);
-                for (int i = 0; i < n; i++) { gif.SelectActiveFrame(dim, i); list.Add(new Bitmap(gif)); }
+    // the background, made once: a dark field with the app's icon on it, pixelated (the canvas is shown with hard pixel edges)
+    // and faint. The icon's big sizes are PNG inside the .ico, which .NET's Icon class draws blank, so the PNG is read directly
+    static Bitmap MakeStill() {
+        var b = new Bitmap(CANVAS_W, CANVAS_H, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(b)) {
+            g.Clear(Color.FromArgb(22, 28, 44));
+            Bitmap pic = null;
+            try { pic = LargestPicture(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "hand_freeze.ico")); } catch { }
+            if (pic == null) try { pic = Icon.ExtractAssociatedIcon(Application.ExecutablePath).ToBitmap(); } catch { }
+            if (pic != null) {
+                int side = CANVAS_W - 20;
+                var cm = new ColorMatrix { Matrix33 = PIC_STRENGTH };
+                using (var ia = new ImageAttributes()) {
+                    ia.SetColorMatrix(cm);
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(pic, new Rectangle((CANVAS_W - side) / 2, (CANVAS_H - side) / 2 + 20, side, side), 0, 0, pic.Width, pic.Height, GraphicsUnit.Pixel, ia);
+                }
+                pic.Dispose();
             }
-        } catch { }
-        if (list.Count == 0) list.Add(new Bitmap(CANVAS_W, CANVAS_H));
-        return list;
+        }
+        return b;
     }
+    static Bitmap LargestPicture(string path) {
+        byte[] f = File.ReadAllBytes(path);
+        int count = BitConverter.ToUInt16(f, 4), best = -1, bestSide = 0;
+        for (int i = 0; i < count; i++) { int e = 6 + 16 * i, side = f[e] == 0 ? 256 : f[e]; if (side > bestSide) { bestSide = side; best = e; } }
+        if (best < 0) return null;
+        int size = BitConverter.ToInt32(f, best + 8), at = BitConverter.ToInt32(f, best + 12);
+        bool png = f[at] == 0x89 && f[at + 1] == 0x50 && f[at + 2] == 0x4E && f[at + 3] == 0x47;
+        if (png) using (var ms = new MemoryStream(f, at, size)) using (var img = Image.FromStream(ms)) return new Bitmap(img);
+        using (var ico = new Icon(path, bestSide, bestSide)) return ico.ToBitmap();
+    }
+
 
     void LoadSettings() {
         try {
@@ -144,10 +165,7 @@ class FreezeUi : Form {
     // ---- behaviour -------------------------------------------------------------------------------------------------
     void Step() {
         var now = DateTime.Now;
-        float dt = (float)(now - lastTick).TotalMilliseconds;
-        lastTick = now;
-        float target = on ? 1 : 0;
-        fade += Math.Sign(target - fade) * Math.Min(Math.Abs(target - fade), dt / FADE_MS);
+        fade = on ? 1 : 0;
         shared.Tell(on && stickToggle, buttonsToo);   // v4: the layer acts on the click only while this is fresh
         int seq = shared.ToggleSeq;
         if (toggleSeq >= 0 && seq != toggleSeq) { countdownHands = 0; Beep(shared.Frozen != 0 ? FROZEN_HZ : TICK_HZ, shared.Frozen != 0 ? FROZEN_MS : TICK_MS * 2); }
@@ -163,7 +181,11 @@ class FreezeUi : Form {
                 if (whole != lastBeep) { lastBeep = whole; Beep(TICK_HZ, TICK_MS); }
             }
         }
-        Invalidate();
+        // redraw only when what the window shows has changed (the countdown's number, a frozen row, the game line, a tick box)
+        int secsLeft = countdownHands != 0 ? Math.Max(1, (int)Math.Ceiling((countdownEnd - now).TotalSeconds)) : 0;
+        string state = string.Join("|", on, countdownHands, secsLeft, shared.Frozen, shared.ButtonsFrozen, shared.GameConnected,
+            shared.GameConnected ? shared.GameName : "", shared.LeftSpaces > 0, shared.RightSpaces > 0, buttonsToo, stickToggle, seconds, pinned);
+        if (state != shownState) { shownState = state; Invalidate(); }
     }
 
     void Press(string what) {
@@ -238,15 +260,7 @@ class FreezeUi : Form {
     }
 
     void DrawBackground(Graphics g) {
-        int frame = (int)((DateTime.Now - started).TotalMilliseconds / FRAME_MS);
-        g.DrawImage(summer[frame % summer.Count], 0, 0, CANVAS_W, CANVAS_H);
-        if (fade > 0) {   // the winter scene fades in over the summer one
-            var cm = new ColorMatrix { Matrix33 = fade };
-            using (var ia = new ImageAttributes()) {
-                ia.SetColorMatrix(cm);
-                g.DrawImage(winter[frame % winter.Count], new Rectangle(0, 0, CANVAS_W, CANVAS_H), 0, 0, CANVAS_W, CANVAS_H, GraphicsUnit.Pixel, ia);
-            }
-        }
+        g.DrawImage(still, 0, 0, CANVAS_W, CANVAS_H);
     }
 
     static Color Mix(Color a, Color b, float t) {
@@ -372,7 +386,7 @@ class FreezeUi : Form {
         Color outC = !on ? Grey(FlameOut) : hot ? Lighter(FlameOut, 0.2f) : FlameOut;
         Color inC = !on ? Grey(FlameIn) : hot ? Lighter(FlameIn, 0.2f) : FlameIn;
         Color edge = !on ? Grey(FlameEdge) : FlameEdge;
-        float flick = on ? (float)Math.Sin((DateTime.Now - started).TotalMilliseconds / 180.0) : 0;
+        float flick = 0;   // 2026-10-25: the flame stands still (no animation)
         using (var outer = FlamePath(cx, cy + FLAME_DROP, 23, 26, flick))
         using (var inner = FlamePath(cx, cy + FLAME_DROP + 6, 14, 17, -flick)) {
             using (var p = new Pen(edge, 3)) g.DrawPath(p, outer);

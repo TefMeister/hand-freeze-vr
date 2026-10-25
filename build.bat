@@ -22,7 +22,6 @@ cmd /c "call "%VCVARS32%" >nul && cl /nologo /O2 /EHsc /std:c++17 /LD /MT /W4 /I
 if errorlevel 1 (echo 32-BIT LAYER BUILD FAILED & exit /b 1)
 
 "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /win32icon:"%HERE%app\hand_freeze.ico" ^
-   /resource:"%HERE%app\summer.gif",summer.gif /resource:"%HERE%app\winter.gif",winter.gif ^
    /resource:"%HERE%app\Silkscreen-Regular.ttf",Silkscreen-Regular.ttf ^
    /out:"%HERE%dist\HandFreeze.exe" "%HERE%app\HandFreeze.cs" "%HERE%app\FreezeUi.cs"
 if errorlevel 1 (echo APP BUILD FAILED & exit /b 1)
