@@ -5,14 +5,19 @@
 // v2 (2026-10-13): LEFT, RIGHT and BOTH rows in the app, so `frozen` is a bit mask and each hand has its own generation.
 // v3 (2026-10-14): `buttons`, the hands whose buttons, triggers, grips and sticks are held too (Tefa: "Hand Freeze needs
 // the ability to freeze button presses holds as well"); the layer counts the input states it took in `inputs_held`.
+// v4 (2026-10-25): the RIGHT STICK CLICK freezes and unfreezes both hands (Tefa: "is there also a way to make Rthumb
+// freeze/unfreeze hands while the hand freeze program is running? it's bound to crouch in game ... so that when hand freeze
+// is running, right thumbstick press doesn't crouch the player and freezes/unfreezes hands instead"). The app ticks it on
+// (`stick_toggle`) and says whether a freeze holds the buttons too (`toggle_buttons`); it writes `app_heartbeat_ms`, so the
+// click only works while the app is open. The layer counts its toggles in `toggle_seq`.
 #pragma once
 #include <windows.h>
 #include <cstdint>
 
-#define HAND_FREEZE_MAPPING_NAME L"Local\\FlatToVR_HandFreeze_v3"
+#define HAND_FREEZE_MAPPING_NAME L"Local\\FlatToVR_HandFreeze_v4"
 #define HAND_FREEZE_MAGIC 0x5A465248u   // "HRFZ"
-#define HAND_FREEZE_VERSION 3u
-#define HAND_FREEZE_SIZE 188            // bytes; the app maps exactly this much (HandFreeze.cs SIZE)
+#define HAND_FREEZE_VERSION 4u
+#define HAND_FREEZE_SIZE 208            // bytes; the app maps exactly this much (HandFreeze.cs SIZE)
 #define HAND_FREEZE_LEFT 1              // bits of `frozen`
 #define HAND_FREEZE_RIGHT 2
 
@@ -33,6 +38,10 @@ struct HandFreezeShared {
     volatile LONG right_spaces;      // 176  layer: ... the right hand (the rest: hand not known, held only with BOTH)
     volatile LONG buttons;           // 180  app: the hands (same bits) whose buttons, triggers, grips and sticks are held too
     volatile LONG inputs_held;       // 184  layer: input states taken since the layer loaded (rises at each buttons freeze)
-};                                   // 188 bytes
+    volatile LONG stick_toggle;      // 188  app: 1 = the right stick click freezes / unfreezes both hands (and never reaches the game)
+    volatile LONG toggle_buttons;    // 192  app: 1 = a freeze by the click holds the buttons too (the app's BUTTONS TOO box)
+    volatile LONG toggle_seq;        // 196  layer: +1 at every freeze or unfreeze by the click (the app beeps)
+    uint64_t app_heartbeat_ms;       // 200  app: GetTickCount64() at its last tick; the click works only while it is fresh
+};                                   // 208 bytes
 #pragma pack(pop)
 static_assert(sizeof(HandFreezeShared) == HAND_FREEZE_SIZE, "the app reads this layout by offset");

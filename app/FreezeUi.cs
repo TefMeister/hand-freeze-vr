@@ -29,6 +29,8 @@ class FreezeUi : Form {
     const int FLAME_DROP = 5;                   // the flame sits a little low, so its tall tongues stay inside the row
     const int STATUS_Y = 339, PIN_W = 78;
     const int BUTTONS_X = 12, BUTTONS_Y = 60, BOX = 10;   // v3: the BUTTONS TOO tick box, in the header where the OFF hint sits
+    const int BUTTONS_HIT_W = 86;
+    const int STICK_X = 104, STICK_HIT_W = 128;          // v4: the R STICK CLICK tick box, beside it
     const int FRAME_MS = 140;               // background frame time (make_backgrounds.py FRAME_MS)
     const int FADE_MS = 500;                // red <-> green switch fade
     const int DEFAULT_SECONDS = 10, MAX_SECONDS = 60;
@@ -55,6 +57,8 @@ class FreezeUi : Form {
     int seconds = DEFAULT_SECONDS;
     bool pinned;
     bool buttonsToo;            // v3: a freeze also holds the buttons, triggers, grips and sticks of those hands
+    bool stickToggle = true;    // v4: the right stick click freezes / unfreezes both hands (and never reaches the game)
+    int toggleSeq = -1;
     int countdownHands;         // which hands the running countdown will freeze; 0 = none
     DateTime countdownEnd;
     int lastBeep = -1;
@@ -92,7 +96,7 @@ class FreezeUi : Form {
         MouseDown += (s, e) => { pressed = HitTest(e.Location); Invalidate(); };
         MouseUp += (s, e) => { string h = HitTest(e.Location); if (h != "" && h == pressed) Press(h); pressed = ""; Invalidate(); };
         MouseWheel += (s, e) => { if (on) SetSeconds(seconds + Math.Sign(e.Delta)); };
-        FormClosing += (s, e) => { shared.Unfreeze(Hands.BOTH); shared.Dispose(); };
+        FormClosing += (s, e) => { shared.Unfreeze(Hands.BOTH); shared.Tell(false, false); shared.Dispose(); };
     }
 
     // ---- resources -------------------------------------------------------------------------------------------------
@@ -132,9 +136,10 @@ class FreezeUi : Form {
             if (lines.Length > 0 && int.TryParse(lines[0].Trim(), out v) && v >= 0 && v <= MAX_SECONDS) seconds = v;
             pinned = lines.Length > 1 && lines[1].Trim() == "pinned";
             buttonsToo = lines.Length > 2 && lines[2].Trim() == "buttons";
+            stickToggle = lines.Length <= 3 || lines[3].Trim() != "no stick";   // on unless switched off
         } catch { }
     }
-    void SaveSettings() { try { File.WriteAllLines(settingsFile, new[] { seconds.ToString(), pinned ? "pinned" : "free", buttonsToo ? "buttons" : "hands only" }); } catch { } }
+    void SaveSettings() { try { File.WriteAllLines(settingsFile, new[] { seconds.ToString(), pinned ? "pinned" : "free", buttonsToo ? "buttons" : "hands only", stickToggle ? "stick" : "no stick" }); } catch { } }
 
     // ---- behaviour -------------------------------------------------------------------------------------------------
     void Step() {
@@ -143,6 +148,10 @@ class FreezeUi : Form {
         lastTick = now;
         float target = on ? 1 : 0;
         fade += Math.Sign(target - fade) * Math.Min(Math.Abs(target - fade), dt / FADE_MS);
+        shared.Tell(on && stickToggle, buttonsToo);   // v4: the layer acts on the click only while this is fresh
+        int seq = shared.ToggleSeq;
+        if (toggleSeq >= 0 && seq != toggleSeq) { countdownHands = 0; Beep(shared.Frozen != 0 ? FROZEN_HZ : TICK_HZ, shared.Frozen != 0 ? FROZEN_MS : TICK_MS * 2); }
+        toggleSeq = seq;
         if (countdownHands != 0) {
             double left = (countdownEnd - now).TotalSeconds;
             if (left <= 0) {
@@ -162,6 +171,7 @@ class FreezeUi : Form {
         if (what == "pin") { pinned = !pinned; TopMost = pinned; SaveSettings(); return; }
         if (!on) return;
         if (what == "buttons") { buttonsToo = !buttonsToo; SaveSettings(); return; }
+        if (what == "stick") { stickToggle = !stickToggle; SaveSettings(); return; }
         if (what == "minus") { SetSeconds(seconds - 1); return; }
         if (what == "plus") { SetSeconds(seconds + 1); return; }
         foreach (var r in Rows) {
@@ -197,7 +207,8 @@ class FreezeUi : Form {
         float x = screen.X / (float)scale, y = screen.Y / (float)scale;
         if (Dist(x, y, SWITCH_X, SWITCH_Y) <= SWITCH_R) return "switch";
         if (new RectangleF(CANVAS_W - 6 - PIN_W, STATUS_Y - 4, PIN_W, 15).Contains(x, y)) return "pin";
-        if (on && new RectangleF(BUTTONS_X - 2, BUTTONS_Y - 3, 120, 16).Contains(x, y)) return "buttons";
+        if (on && new RectangleF(BUTTONS_X - 2, BUTTONS_Y - 3, BUTTONS_HIT_W, 16).Contains(x, y)) return "buttons";
+        if (on && new RectangleF(STICK_X - 2, BUTTONS_Y - 3, STICK_HIT_W, 16).Contains(x, y)) return "stick";
         if (new RectangleF(MINUS_X, SECONDS_Y - 3, ARROW_W, BOX_H).Contains(x, y)) return "minus";
         if (new RectangleF(PLUS_X, SECONDS_Y - 3, ARROW_W, BOX_H).Contains(x, y)) return "plus";
         foreach (var r in Rows) {
@@ -276,6 +287,12 @@ class FreezeUi : Form {
             using (var p = new Pen(tickWord)) g.DrawRectangle(p, BUTTONS_X, BUTTONS_Y, BOX - 1, BOX - 1);
             if (buttonsToo) using (var b = new SolidBrush(Green)) g.FillRectangle(b, BUTTONS_X + 2, BUTTONS_Y + 2, BOX - 4, BOX - 4);
             Say(g, "BUTTONS TOO", SMALL, BUTTONS_X + BOX + 5, BUTTONS_Y + 1, tickWord);
+            // v4: the right stick click (Tefa 2026-10-25)
+            Color stickWord = hover == "stick" ? Lighter(Ice, 0.4f) : Paper;
+            using (var b = new SolidBrush(Ink)) g.FillRectangle(b, STICK_X, BUTTONS_Y, BOX, BOX);
+            using (var p = new Pen(stickWord)) g.DrawRectangle(p, STICK_X, BUTTONS_Y, BOX - 1, BOX - 1);
+            if (stickToggle) using (var b = new SolidBrush(Green)) g.FillRectangle(b, STICK_X + 2, BUTTONS_Y + 2, BOX - 4, BOX - 4);
+            Say(g, "R STICK CLICK", SMALL, STICK_X + BOX + 5, BUTTONS_Y + 1, stickWord);
         }
         // the round switch
         Color c = Mix(Red, Green, fade);

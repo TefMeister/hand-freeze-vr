@@ -36,6 +36,11 @@ for you and `/lanes:update` says when a newer one is out.
    press a snowflake, hold the buttons the way the pose needs them until the countdown ends, then let go of
    everything: the game keeps seeing them held. The row says *FROZEN+BUTTONS*. The flame releases the buttons with
    the hands.
+6. **R STICK CLICK** (the tick box beside it, v4, on by default): while the window is open, a click of the RIGHT
+   thumbstick freezes both hands at once, and the next click lets them go; no countdown. The game never sees that
+   click, so a game that crouches on it (Village) does not crouch. Untick it, or close the window, and the click is the
+   game's again. With **BUTTONS TOO** ticked, the click holds the buttons as well. The window beeps at each click.
+   The game needs one restart after installing v4.
 
 Switch it **OFF** when you do not need it. While it is on but nothing is frozen it only passes the
 game's calls through; while it is off it is not loaded at all.
@@ -69,9 +74,16 @@ powershell -ExecutionPolicy Bypass -File install.ps1  (to %LOCALAPPDATA%\Program
   `app/make_backgrounds.py` (two looping GIFs); the font is Silkscreen, a pixel font drawn only at its own sizes so letters never run together. All three are
   embedded in the exe. **ON** writes the layer's manifest next to the DLL and
   registers it under `HKCU\Software\Khronos\OpenXR\1\ApiLayers\Implicit` (this Windows user only, no
-  admin); **OFF** removes that entry. Freeze/unfreeze go through a 188-byte shared-memory block
+  admin); **OFF** removes that entry. Freeze/unfreeze go through a 208-byte shared-memory block
   (`shared.h`): a left/right bit mask for the hands, another for their buttons, and a counter per hand, so a newly
   frozen hand takes a fresh pose (and fresh button states) while one already frozen keeps its own. The layer also reports which game is connected.
+- **The right stick click (v4):** the layer adds a small action set of its own with one button, the right thumbstick
+  click, appended to the game's own bindings for the Touch, Index, WMR, Pico and Touch Pro / Plus controllers,
+  attached beside the game's set and synced with it. On each click (while the app ticks the box and is open: it writes
+  a heartbeat) the layer freezes both hands or lets them go, and every game button bound to the right stick click
+  reads as not pressed and not changed until the click is released. If the runtime refuses the added binding or set,
+  the game's own call is made again without it. `test/click_test.cpp` plays a pretend runtime under the layer and a
+  game on top of it and presses the buttons itself.
 - **Which hand is which:** each controller space is sorted once, by the subaction path it was made with
   (`/user/hand/left` or `/right`), else by where its action is bound (`xrEnumerateBoundSourcesForAction`).
   A space whose hand cannot be told is held only by **BOTH**.
@@ -88,7 +100,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1  (to %LOCALAPPDATA%\Program
 relative to the hands; the third run through the app's own ON switch (implicit layer). v2 (the
 pixel window, LEFT/RIGHT/BOTH) `[verified-numerically 2026-10-13, n=1]`: left only held the left hand
 at 0.0000 m while the right moved 0.43 m; both held both; the layer told the two hands apart (left 1,
-right 1). The window's countdown, freeze and unfreeze were checked by reading the shared block. **Not yet tried in a real
+right 1). The window's countdown, freeze and unfreeze were checked by reading the shared block. v4 (the right stick
+click) `[verified-numerically 2026-10-25, n=1]`: `test/click_test.cpp`, 15 checks: a click freezes both hands and the
+game's crouch never sees it, holding it toggles once, the next click unfreezes, A still reaches the game, BUTTONS TOO
+holds the buttons, and with the box unticked or the app closed the click crouches again. **Not yet tried in a real
 headset or a real game.**
 
 ## Limits

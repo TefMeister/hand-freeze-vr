@@ -29,10 +29,10 @@ SIM_RUNTIME = r"D:\claude video game stuff\tools\OpenXR-Simulator\openxr_simulat
 LEFT, RIGHT, BOTH = 1, 2, 3   # shared.h HAND_FREEZE_LEFT / _RIGHT bits
 
 
-def shared_block():   # shared.h v3: 188 bytes
-    m = mmap.mmap(-1, 188, tagname="Local\\FlatToVR_HandFreeze_v3")
+def shared_block():   # shared.h v4: 208 bytes
+    m = mmap.mmap(-1, 208, tagname="Local\\FlatToVR_HandFreeze_v4")
     if struct.unpack_from("<I", m, 0)[0] != 0x5A465248:
-        struct.pack_into("<II", m, 0, 0x5A465248, 3)
+        struct.pack_into("<II", m, 0, 0x5A465248, 4)
     return m
 
 

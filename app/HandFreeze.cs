@@ -36,10 +36,11 @@ static class Program {
 static class Hands { public const int LEFT = 1, RIGHT = 2, BOTH = 3; }
 
 class Shared : IDisposable {
-    const string NAME = @"Local\FlatToVR_HandFreeze_v3";
-    const uint MAGIC = 0x5A465248, VERSION = 3;
-    const int SIZE = 188, FROZEN = 8, GEN_LEFT = 12, HEARTBEAT = 16, CONTROLLERS = 28, GAME_NAME = 40,
-              GEN_RIGHT = 168, LEFT_SPACES = 172, RIGHT_SPACES = 176, BUTTONS = 180, INPUTS_HELD = 184;
+    const string NAME = @"Local\FlatToVR_HandFreeze_v4";
+    const uint MAGIC = 0x5A465248, VERSION = 4;
+    const int SIZE = 208, FROZEN = 8, GEN_LEFT = 12, HEARTBEAT = 16, CONTROLLERS = 28, GAME_NAME = 40,
+              GEN_RIGHT = 168, LEFT_SPACES = 172, RIGHT_SPACES = 176, BUTTONS = 180, INPUTS_HELD = 184,
+              STICK_TOGGLE = 188, TOGGLE_BUTTONS = 192, TOGGLE_SEQ = 196, APP_HEARTBEAT = 200;   // v4: the right stick click
     const ulong CONNECTED_WITHIN_MS = 3000;   // a game counts as connected if the layer was heard from this recently
     readonly MemoryMappedFile file;
     readonly MemoryMappedViewAccessor view;
@@ -61,6 +62,13 @@ class Shared : IDisposable {
         view.Write(FROZEN, Frozen | hands);
     }
     public void Unfreeze(int hands) { view.Write(FROZEN, Frozen & ~hands); view.Write(BUTTONS, ButtonsFrozen & ~hands); }
+    // v4: the right stick click freezes / unfreezes both hands while the app is open (written every tick)
+    public void Tell(bool stickToggle, bool buttonsToo) {
+        view.Write(STICK_TOGGLE, stickToggle ? 1 : 0);
+        view.Write(TOGGLE_BUTTONS, buttonsToo ? 1 : 0);
+        view.Write(APP_HEARTBEAT, stickToggle ? GetTickCount64() : 0UL);
+    }
+    public int ToggleSeq { get { return view.ReadInt32(TOGGLE_SEQ); } }
     public int Controllers { get { return view.ReadInt32(CONTROLLERS); } }
     public int LeftSpaces { get { return view.ReadInt32(LEFT_SPACES); } }
     public int RightSpaces { get { return view.ReadInt32(RIGHT_SPACES); } }

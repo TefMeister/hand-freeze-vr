@@ -23,6 +23,13 @@
 // changedSinceLastSync false. An action is sorted into a hand like a space: by the subaction path it is asked with,
 // else by where it is bound; one bound to both hands (or to neither) is held only with BOTH. Poses (xrGetActionStatePose)
 // are left alone: they only say whether a controller is active.
+// v4 (2026-10-25): THE RIGHT STICK CLICK. The layer adds a tiny action set of its own (one button: the right thumbstick
+// click) to the game's: its binding is appended to the game's own suggestions for the Touch, Index, WMR, Pico and Touch
+// Pro / Plus controllers (xrSuggestInteractionProfileBindings), the set is attached beside the game's and synced with it
+// (Window View 1.5's method). While the app's box is ticked and the app is open, each click freezes both hands (or
+// unfreezes them if any are frozen), and every game button bound to the right stick click reads as not pressed, so the
+// game never sees it (no crouch). A profile the game never suggests is left alone; if the runtime refuses ours, the game's
+// own call is made again without it, so the game never pays for it. Our own reads go straight to the next layer.
 #define XR_NO_PROTOTYPES
 #include <windows.h>
 #include <openxr/openxr.h>
@@ -32,6 +39,7 @@
 #include <map>
 #include <mutex>
 #include <type_traits>
+#include <vector>
 
 #include "../shared.h"
 
@@ -50,6 +58,12 @@ PFN_xrEnumerateBoundSourcesForAction g_next_bound_sources = nullptr;
 PFN_xrGetActionStateBoolean g_next_state_bool = nullptr;
 PFN_xrGetActionStateFloat g_next_state_float = nullptr;
 PFN_xrGetActionStateVector2f g_next_state_vec2 = nullptr;
+PFN_xrStringToPath g_next_string_to_path = nullptr;
+PFN_xrCreateActionSet g_next_create_action_set = nullptr;
+PFN_xrCreateAction g_next_create_action = nullptr;
+PFN_xrSuggestInteractionProfileBindings g_next_suggest = nullptr;
+PFN_xrAttachSessionActionSets g_next_attach = nullptr;
+PFN_xrSyncActions g_next_sync = nullptr;
 XrInstance g_instance = XR_NULL_HANDLE;
 
 enum Hand : int { HAND_NOT_LOOKED = 0, HAND_LEFT = 1, HAND_RIGHT = 2, HAND_UNKNOWN = 3 };
@@ -69,6 +83,12 @@ std::recursive_mutex g_mtx;
 std::map<XrSpace, Controller> g_controllers;   // every space made by xrCreateActionSpace
 std::map<XrSession, XrSpace> g_room;           // our own LOCAL space per session: the frame the kept poses live in
 std::map<std::pair<XrAction, XrPath>, Input> g_inputs;   // every action state the game has asked for (v3)
+// v4: the right stick click (see "v4: the right stick click" below)
+std::map<XrSession, bool> g_ours_attached;
+bool g_click_down = false;            // our right stick click, as read at the last sync
+struct Hide { int bound = -1; ULONGLONG retry_ms = 0; bool hid_last = false; };   // bound: -1 not known yet, 0 no, 1 yes
+std::map<std::pair<XrAction, XrPath>, Hide> g_hide;   // game buttons, and whether each is bound to the right stick click
+
 
 // ---- pose maths (unit quaternions, metres) -----------------------------------------------------------------------
 XrQuaternionf qmul(XrQuaternionf a, XrQuaternionf b) {
@@ -274,14 +294,162 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrDestroySession(XrSession session) {
         for (auto it = g_inputs.begin(); it != g_inputs.end();) {
             if (it->second.session == session) it = g_inputs.erase(it); else ++it;
         }
+        g_ours_attached.erase(session);
+        g_hide.clear();
     }
     return g_next_destroy_session(session);
 }
 
 // v3: the three action-state asks; the runtime answers first, then the kept state replaces the answer while held
+// ---- v4: the right stick click -------------------------------------------------------------------------------------
+XrActionSet g_set = XR_NULL_HANDLE;
+XrAction g_click = XR_NULL_HANDLE;
+bool g_actions_failed = false;
+
+constexpr ULONGLONG kAppFreshMs = 3000;   // the app counts as open if it ticked this recently
+bool toggle_on() {
+    auto* s = shared();
+    return s != nullptr && s->stick_toggle != 0 && s->app_heartbeat_ms != 0 && GetTickCount64() - s->app_heartbeat_ms < kAppFreshMs;
+}
+
+XrPath to_path(const char* text) {
+    XrPath p = XR_NULL_PATH;
+    if (g_next_string_to_path != nullptr) g_next_string_to_path(g_instance, text, &p);
+    return p;
+}
+
+bool make_action() {
+    if (g_set != XR_NULL_HANDLE) return g_click != XR_NULL_HANDLE;
+    if (g_actions_failed || g_instance == XR_NULL_HANDLE || g_next_create_action_set == nullptr || g_next_create_action == nullptr) return false;
+    XrActionSetCreateInfo si{XR_TYPE_ACTION_SET_CREATE_INFO};
+    strcpy_s(si.actionSetName, "flattovr_hand_freeze");
+    strcpy_s(si.localizedActionSetName, "Hand Freeze");
+    if (XR_FAILED(g_next_create_action_set(g_instance, &si, &g_set))) { g_actions_failed = true; g_set = XR_NULL_HANDLE; return false; }
+    XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+    strcpy_s(ai.actionName, "hf_right_stick_click");
+    strcpy_s(ai.localizedActionName, "Hand Freeze right stick click");
+    ai.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    if (XR_FAILED(g_next_create_action(g_set, &ai, &g_click))) { g_actions_failed = true; g_click = XR_NULL_HANDLE; return false; }
+    return true;
+}
+
+bool has_right_stick(XrPath profile) {
+    static const char* const kProfiles[] = {
+        "/interaction_profiles/oculus/touch_controller", "/interaction_profiles/valve/index_controller",
+        "/interaction_profiles/microsoft/motion_controller", "/interaction_profiles/bytedance/pico4_controller",
+        "/interaction_profiles/facebook/touch_controller_pro", "/interaction_profiles/meta/touch_controller_plus",
+        "/interaction_profiles/meta/touch_pro_controller", "/interaction_profiles/meta/touch_plus_controller",
+    };
+    for (const char* p : kProfiles) if (profile == to_path(p)) return true;
+    return false;
+}
+
+XRAPI_ATTR XrResult XRAPI_CALL hf_xrSuggestInteractionProfileBindings(XrInstance instance, const XrInteractionProfileSuggestedBinding* sb) {
+    if (sb == nullptr || !make_action() || !has_right_stick(sb->interactionProfile)) return g_next_suggest(instance, sb);
+    std::vector<XrActionSuggestedBinding> all(sb->suggestedBindings, sb->suggestedBindings + sb->countSuggestedBindings);
+    all.push_back({g_click, to_path("/user/hand/right/input/thumbstick/click")});
+    XrInteractionProfileSuggestedBinding copy = *sb;
+    copy.countSuggestedBindings = static_cast<uint32_t>(all.size());
+    copy.suggestedBindings = all.data();
+    const XrResult r = g_next_suggest(instance, &copy);
+    return XR_SUCCEEDED(r) ? r : g_next_suggest(instance, sb);   // never at the game's cost
+}
+
+XRAPI_ATTR XrResult XRAPI_CALL hf_xrAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttachInfo* info) {
+    if (info == nullptr || g_set == XR_NULL_HANDLE) return g_next_attach(session, info);
+    std::vector<XrActionSet> sets(info->actionSets, info->actionSets + info->countActionSets);
+    sets.push_back(g_set);
+    XrSessionActionSetsAttachInfo copy = *info;
+    copy.countActionSets = static_cast<uint32_t>(sets.size());
+    copy.actionSets = sets.data();
+    XrResult r = g_next_attach(session, &copy);
+    const bool ours = XR_SUCCEEDED(r);
+    if (!ours) r = g_next_attach(session, info);
+    std::lock_guard _{g_mtx};
+    g_ours_attached[session] = ours;
+    return r;
+}
+
+// a click: freeze both hands, or unfreeze them if any are frozen (the app's own FREEZE / UN-FREEZE, without the countdown)
+void click_toggle() {
+    auto* s = shared();
+    if (s == nullptr) return;
+    const LONG both = HAND_FREEZE_LEFT | HAND_FREEZE_RIGHT;
+    if (s->frozen != 0) {
+        s->frozen = 0;
+        s->buttons = 0;
+    } else {
+        InterlockedIncrement(&s->generation_left);    // fresh poses for both hands
+        InterlockedIncrement(&s->generation_right);
+        s->buttons = s->toggle_buttons != 0 ? both : 0;   // before the poses, as the app does
+        s->frozen = both;
+    }
+    InterlockedIncrement(&s->toggle_seq);
+}
+
+XRAPI_ATTR XrResult XRAPI_CALL hf_xrSyncActions(XrSession session, const XrActionsSyncInfo* info) {
+    bool ours = false;
+    {
+        std::lock_guard _{g_mtx};
+        auto it = g_ours_attached.find(session);
+        ours = it != g_ours_attached.end() && it->second;
+    }
+    if (!ours || info == nullptr) return g_next_sync(session, info);
+    std::vector<XrActiveActionSet> sets(info->activeActionSets, info->activeActionSets + info->countActiveActionSets);
+    sets.push_back({g_set, XR_NULL_PATH});
+    XrActionsSyncInfo copy = *info;
+    copy.countActiveActionSets = static_cast<uint32_t>(sets.size());
+    copy.activeActionSets = sets.data();
+    XrResult r = g_next_sync(session, &copy);
+    if (XR_FAILED(r)) return g_next_sync(session, info);
+    XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
+    gi.action = g_click;
+    XrActionStateBoolean st{XR_TYPE_ACTION_STATE_BOOLEAN};
+    const bool down = XR_SUCCEEDED(g_next_state_bool(session, &gi, &st)) && st.isActive && st.currentState;
+    if (down && !g_click_down && toggle_on()) click_toggle();
+    g_click_down = down;
+    return r;
+}
+
+// is this game button bound to the right stick click? (bindings exist only after the game syncs: asked again each second
+// until the runtime names them)
+int bound_to_right_click(XrSession session, XrAction action, XrPath subaction, Hide& h) {
+    if (h.bound >= 0) return h.bound;
+    const ULONGLONG now = GetTickCount64();
+    if (now < h.retry_ms) return -1;
+    h.retry_ms = now + 1000;
+    if (hand_of_path(subaction) == HAND_LEFT || g_next_bound_sources == nullptr || g_next_path_to_string == nullptr) return h.bound = 0;
+    XrBoundSourcesForActionEnumerateInfo bi{XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
+    bi.action = action;
+    XrPath sources[16]{};
+    uint32_t n = 0;
+    if (XR_FAILED(g_next_bound_sources(session, &bi, 16, &n, sources)) || n == 0) return -1;
+    h.bound = 0;
+    static const char kStick[] = "/user/hand/right/input/thumbstick";
+    for (uint32_t i = 0; i < n && i < 16; ++i) {
+        char text[XR_MAX_PATH_LENGTH]{};
+        uint32_t len = 0;
+        if (XR_FAILED(g_next_path_to_string(g_instance, sources[i], XR_MAX_PATH_LENGTH, &len, text))) continue;
+        if (std::strncmp(text, kStick, sizeof kStick - 1) != 0) continue;
+        const char* rest = text + sizeof kStick - 1;
+        if (*rest == 0 || std::strcmp(rest, "/click") == 0) h.bound = 1;   // the stick's own button (a bare stick path on a button = the click)
+    }
+    return h.bound;
+}
+
+// while the click is ours, a game button bound to it reads "not pressed, not changed" (and once more on the release)
+void hide_click(XrSession session, const XrActionStateGetInfo* info, XrActionStateBoolean& state) {
+    if (info == nullptr || info->action == g_click || !toggle_on()) return;
+    std::lock_guard _{g_mtx};
+    Hide& h = g_hide[{info->action, info->subactionPath}];
+    if (bound_to_right_click(session, info->action, info->subactionPath, h) != 1) return;
+    if (g_click_down || h.hid_last) { state.currentState = XR_FALSE; state.changedSinceLastSync = XR_FALSE; }
+    h.hid_last = g_click_down;
+}
+
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo* info, XrActionStateBoolean* state) {
     const XrResult r = g_next_state_bool(session, info, state);
-    if (XR_SUCCEEDED(r) && state != nullptr) held_input(session, info, *state, &Input::b);
+    if (XR_SUCCEEDED(r) && state != nullptr) { hide_click(session, info, *state); held_input(session, info, *state, &Input::b); }
     return r;
 }
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo* info, XrActionStateFloat* state) {
@@ -351,6 +519,10 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetInstanceProcAddr(XrInstance instance, con
         {"xrGetActionStateBoolean", (PFN_xrVoidFunction)hf_xrGetActionStateBoolean, (PFN_xrVoidFunction*)&g_next_state_bool},
         {"xrGetActionStateFloat", (PFN_xrVoidFunction)hf_xrGetActionStateFloat, (PFN_xrVoidFunction*)&g_next_state_float},
         {"xrGetActionStateVector2f", (PFN_xrVoidFunction)hf_xrGetActionStateVector2f, (PFN_xrVoidFunction*)&g_next_state_vec2},
+        // v4: the right stick click
+        {"xrSuggestInteractionProfileBindings", (PFN_xrVoidFunction)hf_xrSuggestInteractionProfileBindings, (PFN_xrVoidFunction*)&g_next_suggest},
+        {"xrAttachSessionActionSets", (PFN_xrVoidFunction)hf_xrAttachSessionActionSets, (PFN_xrVoidFunction*)&g_next_attach},
+        {"xrSyncActions", (PFN_xrVoidFunction)hf_xrSyncActions, (PFN_xrVoidFunction*)&g_next_sync},
     };
     for (const auto& h : hooks) {
         if (std::strcmp(name, h.name) == 0) { *h.next = *function; *function = h.ours; break; }
@@ -371,6 +543,13 @@ void fetch_next(XrInstance instance) {
     get("xrDestroySession", g_next_destroy_session);
     get("xrPathToString", g_next_path_to_string);
     get("xrEnumerateBoundSourcesForAction", g_next_bound_sources);
+    get("xrStringToPath", g_next_string_to_path);
+    get("xrCreateActionSet", g_next_create_action_set);
+    get("xrCreateAction", g_next_create_action);
+    get("xrGetActionStateBoolean", g_next_state_bool);
+    get("xrSuggestInteractionProfileBindings", g_next_suggest);
+    get("xrAttachSessionActionSets", g_next_attach);
+    get("xrSyncActions", g_next_sync);
     g_instance = instance;
 }
 
