@@ -105,8 +105,7 @@ at 0.0000 m while the right moved 0.43 m; both held both; the layer told the two
 right 1). The window's countdown, freeze and unfreeze were checked by reading the shared block. v4 (the right stick
 click) `[verified-numerically 2026-10-25, n=1]`: `test/click_test.cpp`, 15 checks: a click freezes both hands and the
 game's crouch never sees it, holding it toggles once, the next click unfreezes, A still reaches the game, BUTTONS TOO
-holds the buttons, and with the box unticked or the app closed the click crouches again. Worn in Village the same day `[verified-live 2026-10-25, n=1]` (Tefa: "rthumb works super well"). **Not yet tried in a real
-headset or a real game.**
+holds the buttons, and with the box unticked or the app closed the click crouches again. Worn in Village the same day `[verified-live 2026-10-25, n=1]` (Tefa: "rthumb works super well").
 
 ## Limits
 
