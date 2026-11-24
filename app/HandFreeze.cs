@@ -21,14 +21,25 @@ using Microsoft.Win32;
 
 static class Program {
     [STAThread]
-    static void Main() {
+    static int Main(string[] args) {
+        // tests: --selftest (the sums, no window); --game <folder> a pretend game's folder; --tab spots; --shot <png> a picture of
+        // the window, then close. A test run never touches the registry and may run beside the real window.
+        var o = new FreezeUi.Options();
+        for (int i = 0; i < args.Length; i++) {
+            if (args[i] == "--selftest") return SelfTest.Run();
+            if (args[i] == "--game" && i + 1 < args.Length) { o.Game = args[++i]; o.Test = true; }
+            else if (args[i] == "--tab" && i + 1 < args.Length) o.Tab = args[++i];
+            else if (args[i] == "--shot" && i + 1 < args.Length) { o.Shot = args[++i]; o.Test = true; }
+        }
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        if (o.Test) { Application.Run(new FreezeUi(o)); return 0; }
         bool first;
         using (var one = new Mutex(true, "FlatToVR_HandFreeze_App", out first)) {
-            if (!first) { MessageBox.Show("Hand Freeze is already open.", "Hand Freeze"); return; }
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new FreezeUi());
+            if (!first) { MessageBox.Show("Hand Freeze is already open.", "Hand Freeze"); return 1; }
+            Application.Run(new FreezeUi(o));
         }
+        return 0;
     }
 }
 
@@ -69,6 +80,7 @@ class Shared : IDisposable {
         view.Write(APP_HEARTBEAT, stickToggle ? GetTickCount64() : 0UL);
     }
     public int ToggleSeq { get { return view.ReadInt32(TOGGLE_SEQ); } }
+    public int LayerPid { get { return view.ReadInt32(24); } }   // the game's process id
     public int Controllers { get { return view.ReadInt32(CONTROLLERS); } }
     public int LeftSpaces { get { return view.ReadInt32(LEFT_SPACES); } }
     public int RightSpaces { get { return view.ReadInt32(RIGHT_SPACES); } }

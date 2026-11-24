@@ -21,9 +21,12 @@ set "VCVARS32=%VCVARS:vcvars64=vcvars32%"
 cmd /c "call "%VCVARS32%" >nul && cl /nologo /O2 /EHsc /std:c++17 /LD /MT /W4 /I"%HERE%third_party" "%HERE%layer\hand_freeze_layer.cpp" /Fo"%HERE%build\x86\\" /Fe"%HERE%dist\hand_freeze_layer32.dll" /link /NOLOGO /IMPLIB:"%HERE%build\x86\hand_freeze_layer32.lib""
 if errorlevel 1 (echo 32-BIT LAYER BUILD FAILED & exit /b 1)
 
+rem 2026-11-25: the family look (the shared kit, copied from hand-poser-vr\kit by its tools\sync_kit.py; a drifted copy stops the build)
+set KITCHECK=%HERE%..\hand-poser-vr\tools\sync_kit.py
+if exist "%KITCHECK%" (python "%KITCHECK%" --check || (echo KIT OUT OF STEP & exit /b 1))
 "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /win32icon:"%HERE%app\hand_freeze.ico" ^
-   /resource:"%HERE%app\Silkscreen-Regular.ttf",Silkscreen-Regular.ttf ^
-   /out:"%HERE%dist\HandFreeze.exe" "%HERE%app\HandFreeze.cs" "%HERE%app\FreezeUi.cs"
+   /out:"%HERE%dist\HandFreeze.exe" "%HERE%app\*.cs" "%HERE%kit\*.cs"
 if errorlevel 1 (echo APP BUILD FAILED & exit /b 1)
+copy /y "%HERE%reframework\autorun\hand_freeze_spots.lua" "%HERE%dist\" >nul
 copy /y "%HERE%app\hand_freeze.ico" "%HERE%dist\" >nul
 echo BUILD OK: %HERE%dist

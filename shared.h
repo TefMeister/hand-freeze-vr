@@ -45,3 +45,47 @@ struct HandFreezeShared {
 };                                   // 208 bytes
 #pragma pack(pop)
 static_assert(sizeof(HandFreezeShared) == HAND_FREEZE_SIZE, "the app reads this layout by offset");
+
+// ---- v5 (2026-11-25): PUT THE HANDS SOMEWHERE -----------------------------------------------------------------------
+// Tefa: "when clicked on one of these, while hand freeze is active, both hands with the weapon get raised to my eye height in
+// front of me already holding this position"; and "to be able to move and rotate the frozen weapon with hands on it ... without
+// unfreezing them". A SECOND block, so the v4 one above keeps its name and layout (Visceral RE8's sleephands.cpp reads it).
+// The app gives a pose per hand in the layer's room (its LOCAL space) and, for a hand in `synth`, what its grip, trigger and
+// face buttons read; everything else of a synth hand reads "not pressed". The layer reports the head and both hands every frame
+// (the real controllers, and what the game is being told), so the app can do the sums. A pose is for the hand's REFERENCE space
+// (the one bound to .../input/grip/pose when the game has one); the hand's other spaces keep their own offset from it.
+// The poses count only while `app_heartbeat_ms` is fresh: a closed or crashed app lets the hands go back to the plain freeze.
+#define HAND_FREEZE_POSE_MAPPING_NAME L"Local\\FlatToVR_HandFreeze_Pose_v1"
+#define HAND_FREEZE_POSE_MAGIC 0x5A504648u   // "HFPZ"
+#define HAND_FREEZE_POSE_VERSION 1u
+#define HAND_FREEZE_POSE_SIZE 264
+#define HAND_FREEZE_BTN_LOW 1           // bits of `buttons[]`: A (right) / X (left)
+#define HAND_FREEZE_BTN_HIGH 2          //                      B (right) / Y (left)
+#define HAND_FREEZE_LIVE_HEAD 1         // bits of `live_valid`
+#define HAND_FREEZE_LIVE_LEFT 2
+#define HAND_FREEZE_LIVE_RIGHT 4
+
+#pragma pack(push, 4)
+struct HandFreezePose {                // a pose is 7 floats: position x y z (metres), then the quaternion x y z w
+    uint32_t magic;                  //   0
+    uint32_t version;                //   4
+    volatile LONG posed;             //   8  app: the hands (HAND_FREEZE_LEFT / _RIGHT bits) whose pose is given below
+    volatile LONG synth;             //  12  app: the hands whose grip, trigger and buttons are given below (the rest: not pressed)
+    float pose_left[7];              //  16  app: the left hand's reference space, in the room
+    float pose_right[7];             //  44  app
+    float squeeze[2];                //  72  app: grip 0..1, left then right
+    float trigger[2];                //  80  app: trigger 0..1
+    volatile LONG buttons[2];        //  88  app: HAND_FREEZE_BTN_* bits
+    volatile LONG live_valid;        //  96  layer: HAND_FREEZE_LIVE_* bits: which of the poses below are this frame's
+    float head[7];                   // 100  layer: the headset (VIEW) in the room
+    float real_left[7];              // 128  layer: where the real left controller is (reference space)
+    float real_right[7];             // 156  layer
+    float eff_left[7];               // 184  layer: what the game is told (the frozen or given pose while held, else the real one)
+    float eff_right[7];              // 212  layer
+    uint64_t live_ms;                // 240  layer: GetTickCount64() of that report
+    uint64_t app_heartbeat_ms;       // 248  app: GetTickCount64() at its last tick
+    volatile LONG inputs_posed;      // 256  layer: answers it replaced (rises while a synth hand is asked about)
+    volatile LONG ref_grip;          // 260  layer: hands (bits) whose reference space is the game's grip pose (else whichever came first)
+};                                   // 264 bytes
+#pragma pack(pop)
+static_assert(sizeof(HandFreezePose) == HAND_FREEZE_POSE_SIZE, "the app reads this layout by offset");

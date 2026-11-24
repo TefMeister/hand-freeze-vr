@@ -30,6 +30,10 @@
 // unfreezes them if any are frozen), and every game button bound to the right stick click reads as not pressed, so the
 // game never sees it (no crouch). A profile the game never suggests is left alone; if the runtime refuses ours, the game's
 // own call is made again without it, so the game never pays for it. Our own reads go straight to the next layer.
+// v5 (2026-11-25): PUT THE HANDS SOMEWHERE (shared.h, the second block). While a hand is frozen and the app gives it a pose, the
+// game is told that pose instead of the kept one; a hand in `synth` has its grip, trigger and face buttons answered from the block
+// and everything else as "not pressed". Which action is a grip, a trigger or a button is read from the game's own suggested
+// bindings. Every frame the layer reports the head, the real controllers and what the game is told, in its room.
 #define XR_NO_PROTOTYPES
 #include <windows.h>
 #include <openxr/openxr.h>
@@ -78,6 +82,7 @@ struct Input {
     int hand = HAND_NOT_LOOKED;
     bool kept = false; LONG kept_generation = 0;
     XrActionStateBoolean b{}; XrActionStateFloat f{}; XrActionStateVector2f v{};   // the kept state, one of the three used
+    float synth_last = -1.0f;        // v5: the last value answered from the pose block (for "changed since the last ask")
 };
 std::recursive_mutex g_mtx;
 std::map<XrSpace, Controller> g_controllers;   // every space made by xrCreateActionSpace
@@ -229,6 +234,177 @@ void held_input(XrSession session, const XrActionStateGetInfo* info, T& live, T 
     live = out;
 }
 
+// ---- v5: the given poses ---------------------------------------------------------------------------------------------
+// what each of the game's actions is bound to, from its own suggestions (any profile): bits per hand, the right hand's shifted
+enum : unsigned { K_SQUEEZE = 1, K_TRIGGER = 2, K_LOW = 4, K_HIGH = 8, K_GRIP_POSE = 16, K_AIM_POSE = 32, K_ANY = 64, K_RIGHT_SHIFT = 8 };
+std::map<XrAction, unsigned> g_action_bits;
+std::map<XrSession, XrSpace> g_view;           // our own VIEW space per session: the head
+HandFreezePose* g_pose = nullptr;
+XrTime g_report_time = 0;
+constexpr ULONGLONG kPoseFreshMs = 1500;       // the app's poses count while it ticked this recently
+
+HandFreezePose* pose_block() {
+    if (g_pose != nullptr) return g_pose;
+    HANDLE h = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(HandFreezePose), HAND_FREEZE_POSE_MAPPING_NAME);
+    if (h == nullptr) return nullptr;
+    auto* p = static_cast<HandFreezePose*>(MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(HandFreezePose)));
+    if (p == nullptr) { CloseHandle(h); return nullptr; }
+    if (p->magic != HAND_FREEZE_POSE_MAGIC) { p->version = HAND_FREEZE_POSE_VERSION; p->magic = HAND_FREEZE_POSE_MAGIC; }
+    g_pose = p;
+    return p;
+}
+bool pose_fresh(const HandFreezePose* p) { return p != nullptr && p->app_heartbeat_ms != 0 && GetTickCount64() - p->app_heartbeat_ms < kPoseFreshMs; }
+LONG hand_bit(int hand) { return hand == HAND_LEFT ? HAND_FREEZE_LEFT : hand == HAND_RIGHT ? HAND_FREEZE_RIGHT : 0; }
+
+XrPosef compose(const XrPosef& a, const XrPosef& b) {   // b, given in a's frame, in a's parent frame
+    const XrVector3f r = rot(a.orientation, b.position);
+    return {qmul(a.orientation, b.orientation), {a.position.x + r.x, a.position.y + r.y, a.position.z + r.z}};
+}
+void put_pose(float* out, const XrPosef& p) {
+    out[0] = p.position.x; out[1] = p.position.y; out[2] = p.position.z;
+    out[3] = p.orientation.x; out[4] = p.orientation.y; out[5] = p.orientation.z; out[6] = p.orientation.w;
+}
+bool get_pose(const float* in, XrPosef& p) {
+    float v[7]; std::memcpy(v, in, sizeof v);   // one copy: the app may be writing
+    const float n = v[3] * v[3] + v[4] * v[4] + v[5] * v[5] + v[6] * v[6];
+    if (!(n > 0.9f && n < 1.1f)) return false;  // not a rotation (half written, or never set)
+    for (float f : v) if (!(f > -100.0f && f < 100.0f)) return false;
+    p = {{v[3], v[4], v[5], v[6]}, {v[0], v[1], v[2]}};
+    return true;
+}
+
+// the hand's reference space in this session: the one on the game's grip pose if it has one, else the first made
+XrSpace ref_space(XrSession session, int hand, bool* is_grip = nullptr) {
+    XrSpace first = XR_NULL_HANDLE;
+    for (auto& c : g_controllers) {
+        if (c.second.session != session || hand_of(c.second) != hand) continue;
+        auto b = g_action_bits.find(c.second.action);
+        const unsigned bits = b == g_action_bits.end() ? 0 : (hand == HAND_RIGHT ? b->second >> K_RIGHT_SHIFT : b->second);
+        if ((bits & K_GRIP_POSE) != 0) { if (is_grip != nullptr) *is_grip = true; return c.first; }
+        if (first == XR_NULL_HANDLE) first = c.first;
+    }
+    if (is_grip != nullptr) *is_grip = false;
+    return first;
+}
+
+// the pose the app gives this controller space, in the room; false = none (not given, stale, or not a rotation)
+bool given_pose(XrSpace space, const Controller& c, int hand, XrTime time, XrPosef& in_room) {
+    const HandFreezePose* p = pose_block();
+    if (!pose_fresh(p) || (p->posed & hand_bit(hand)) == 0) return false;
+    XrPosef target{};
+    if (!get_pose(hand == HAND_LEFT ? p->pose_left : p->pose_right, target)) return false;
+    const XrSpace ref = ref_space(c.session, hand);
+    in_room = target;
+    if (ref != XR_NULL_HANDLE && ref != space) {   // another space of the same hand (the aim pose beside the grip pose): its own offset
+        XrSpaceLocation o{XR_TYPE_SPACE_LOCATION};
+        if (XR_SUCCEEDED(g_next_locate_space(space, ref, time, &o)) && (o.locationFlags & kValid) == kValid) in_room = compose(target, o.pose);
+    }
+    return true;
+}
+
+// once per frame time: the head, the real controllers and what the game is told, for the app's sums
+void report(XrSession session, XrTime time) {
+    HandFreezePose* p = pose_block();
+    if (p == nullptr || time == g_report_time) return;
+    g_report_time = time;
+    auto r = g_room.find(session);
+    if (r == g_room.end()) return;
+    LONG valid = 0, grip = 0;
+    auto v = g_view.find(session);
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    if (v != g_view.end() && XR_SUCCEEDED(g_next_locate_space(v->second, r->second, time, &loc)) && (loc.locationFlags & kValid) == kValid) {
+        put_pose(p->head, loc.pose); valid |= HAND_FREEZE_LIVE_HEAD;
+    }
+    const LONG frozen = frozen_now();
+    for (int hand : {HAND_LEFT, HAND_RIGHT}) {
+        bool is_grip = false;
+        const XrSpace ref = ref_space(session, hand, &is_grip);
+        if (ref == XR_NULL_HANDLE) continue;
+        if (is_grip) grip |= hand_bit(hand);
+        const Controller& c = g_controllers[ref];
+        XrSpaceLocation now{XR_TYPE_SPACE_LOCATION};
+        const bool real = XR_SUCCEEDED(g_next_locate_space(ref, r->second, time, &now)) && (now.locationFlags & kValid) == kValid;
+        XrPosef eff = now.pose;
+        bool have = real;
+        if ((frozen & hand_bit(hand)) != 0) {
+            XrPosef g{};
+            if (given_pose(ref, c, hand, time, g)) { eff = g; have = true; }
+            else if (c.kept && c.kept_generation == generation_of(hand)) { eff = c.pose_in_room; have = true; }
+        }
+        if (real) put_pose(hand == HAND_LEFT ? p->real_left : p->real_right, now.pose);
+        if (have) { put_pose(hand == HAND_LEFT ? p->eff_left : p->eff_right, eff); valid |= hand == HAND_LEFT ? HAND_FREEZE_LIVE_LEFT : HAND_FREEZE_LIVE_RIGHT; }
+    }
+    p->ref_grip = grip;
+    p->live_valid = valid;
+    p->live_ms = GetTickCount64();
+}
+void report_for(XrSpace space, XrTime time) {
+    std::lock_guard _{g_mtx};
+    auto c = g_controllers.find(space);
+    if (c != g_controllers.end()) report(c->second.session, time);
+}
+
+// a synth hand's answer for an action state: its grip, trigger and face buttons from the block, anything else "not pressed"
+template <class T, class Set>
+void synth_input(const XrActionStateGetInfo* info, T& state, Set set) {
+    const HandFreezePose* p = pose_block();
+    if (info == nullptr || !pose_fresh(p)) return;
+    const LONG mask = p->synth;
+    if (mask == 0) return;
+    std::lock_guard _{g_mtx};
+    auto b = g_action_bits.find(info->action);
+    const unsigned bits = b == g_action_bits.end() ? 0 : b->second;
+    const int hand = hand_of_path(info->subactionPath);
+    float value = 0.0f;
+    bool any = false;
+    for (int h : {HAND_LEFT, HAND_RIGHT}) {
+        if (hand != HAND_UNKNOWN && hand != h) continue;
+        const unsigned k = h == HAND_RIGHT ? bits >> K_RIGHT_SHIFT : bits & ((1u << K_RIGHT_SHIFT) - 1);
+        if (hand == HAND_UNKNOWN && k == 0) continue;          // asked for no hand, and not bound to this one
+        if ((mask & hand_bit(h)) == 0) { if (hand == HAND_UNKNOWN && k != 0) return; continue; }   // shared with a hand that is live: leave it
+        any = true;
+        const int i = h == HAND_RIGHT ? 1 : 0;
+        float x = 0.0f;
+        if ((k & K_SQUEEZE) != 0) x = p->squeeze[i] > x ? p->squeeze[i] : x;
+        if ((k & K_TRIGGER) != 0) x = p->trigger[i] > x ? p->trigger[i] : x;
+        if ((k & K_LOW) != 0 && (p->buttons[i] & HAND_FREEZE_BTN_LOW) != 0) x = 1.0f;
+        if ((k & K_HIGH) != 0 && (p->buttons[i] & HAND_FREEZE_BTN_HIGH) != 0) x = 1.0f;
+        value = x > value ? x : value;
+    }
+    if (!any) return;
+    auto& in = g_inputs[{info->action, info->subactionPath}];
+    set(state, value);
+    state.isActive = XR_TRUE;
+    state.changedSinceLastSync = in.synth_last >= 0.0f && in.synth_last != value ? XR_TRUE : XR_FALSE;
+    in.synth_last = value;
+    InterlockedIncrement(&pose_block()->inputs_posed);
+}
+
+// remember what each action of a suggestion is bound to (v5)
+void note_bindings(const XrInteractionProfileSuggestedBinding* sb) {
+    if (sb == nullptr || g_next_path_to_string == nullptr) return;
+    std::lock_guard _{g_mtx};
+    for (uint32_t i = 0; i < sb->countSuggestedBindings; ++i) {
+        char text[XR_MAX_PATH_LENGTH]{};
+        uint32_t n = 0;
+        if (XR_FAILED(g_next_path_to_string(g_instance, sb->suggestedBindings[i].binding, XR_MAX_PATH_LENGTH, &n, text))) continue;
+        unsigned shift;
+        const char* rest;
+        if (std::strncmp(text, "/user/hand/left/", 16) == 0) { shift = 0; rest = text + 16; }
+        else if (std::strncmp(text, "/user/hand/right/", 17) == 0) { shift = K_RIGHT_SHIFT; rest = text + 17; }
+        else continue;
+        auto is = [&](const char* part) { const size_t l = std::strlen(part); return std::strncmp(rest, part, l) == 0 && (rest[l] == 0 || rest[l] == '/'); };
+        unsigned k = K_ANY;
+        if (is("input/squeeze")) k |= K_SQUEEZE;
+        else if (is("input/trigger")) k |= K_TRIGGER;
+        else if (is("input/a") || is("input/x")) k |= K_LOW;
+        else if (is("input/b") || is("input/y")) k |= K_HIGH;
+        else if (is("input/grip")) k |= K_GRIP_POSE;
+        else if (is("input/aim")) k |= K_AIM_POSE;
+        g_action_bits[sb->suggestedBindings[i].action] |= k << shift;
+    }
+}
+
 // The held answer for "controller `space` relative to `base`" at `time`. False = answer live (not a controller, the
 // base is itself a controller, or no usable pose yet).
 bool held_pose(XrSpace space, XrSpace base, XrTime time, LONG mask, XrPosef& out) {
@@ -244,15 +420,19 @@ bool held_pose(XrSpace space, XrSpace base, XrTime time, LONG mask, XrPosef& out
     if (c->second.kept && c->second.kept_generation != generation) c->second.kept = false;   // a new freeze: fresh pose
     if (!c->second.kept) {
         XrSpaceLocation now{XR_TYPE_SPACE_LOCATION};
-        if (XR_FAILED(g_next_locate_space(space, r->second, time, &now)) || (now.locationFlags & kValid) != kValid) return false;
-        c->second.pose_in_room = now.pose;
-        c->second.kept = true;
-        c->second.kept_generation = generation;
-        InterlockedIncrement(&s->poses_held);
+        if (XR_SUCCEEDED(g_next_locate_space(space, r->second, time, &now)) && (now.locationFlags & kValid) == kValid) {
+            c->second.pose_in_room = now.pose;
+            c->second.kept = true;
+            c->second.kept_generation = generation;
+            InterlockedIncrement(&s->poses_held);
+        }
     }
+    XrPosef in_room = c->second.pose_in_room;
+    const bool given = given_pose(space, c->second, hand, time, in_room);   // v5: the app's pose wins over the kept one
+    if (!given && !c->second.kept) return false;
     XrSpaceLocation b{XR_TYPE_SPACE_LOCATION};   // where the base is in the room right now (the head keeps moving)
     if (XR_FAILED(g_next_locate_space(base, r->second, time, &b)) || (b.locationFlags & kValid) != kValid) return false;
-    out = relative(b.pose, c->second.pose_in_room);
+    out = relative(b.pose, in_room);
     return true;
 }
 
@@ -272,6 +452,9 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrCreateActionSpace(XrSession session, const X
         ci.poseInReferenceSpace.orientation.w = 1.0f;
         XrSpace room = XR_NULL_HANDLE;
         if (XR_SUCCEEDED(g_next_create_reference_space(session, &ci, &room))) g_room[session] = room;
+        ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;   // v5: the head, for the app's sums
+        XrSpace view = XR_NULL_HANDLE;
+        if (XR_SUCCEEDED(g_next_create_reference_space(session, &ci, &view))) g_view[session] = view;
     }
     return r;
 }
@@ -288,6 +471,7 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrDestroySession(XrSession session) {
     {
         std::lock_guard _{g_mtx};
         g_room.erase(session);   // the runtime destroys the session's spaces with it
+        g_view.erase(session);
         for (auto it = g_controllers.begin(); it != g_controllers.end();) {
             if (it->second.session == session) it = g_controllers.erase(it); else ++it;
         }
@@ -345,6 +529,7 @@ bool has_right_stick(XrPath profile) {
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrSuggestInteractionProfileBindings(XrInstance instance, const XrInteractionProfileSuggestedBinding* sb) {
+    note_bindings(sb);   // v5
     if (sb == nullptr || !make_action() || !has_right_stick(sb->interactionProfile)) return g_next_suggest(instance, sb);
     std::vector<XrActionSuggestedBinding> all(sb->suggestedBindings, sb->suggestedBindings + sb->countSuggestedBindings);
     all.push_back({g_click, to_path("/user/hand/right/input/thumbstick/click")});
@@ -449,17 +634,26 @@ void hide_click(XrSession session, const XrActionStateGetInfo* info, XrActionSta
 
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo* info, XrActionStateBoolean* state) {
     const XrResult r = g_next_state_bool(session, info, state);
-    if (XR_SUCCEEDED(r) && state != nullptr) { hide_click(session, info, *state); held_input(session, info, *state, &Input::b); }
+    if (XR_SUCCEEDED(r) && state != nullptr) {
+        hide_click(session, info, *state); held_input(session, info, *state, &Input::b);
+        if (info == nullptr || info->action != g_click) synth_input(info, *state, [](XrActionStateBoolean& s, float v) { s.currentState = v > 0.5f ? XR_TRUE : XR_FALSE; });
+    }
     return r;
 }
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo* info, XrActionStateFloat* state) {
     const XrResult r = g_next_state_float(session, info, state);
-    if (XR_SUCCEEDED(r) && state != nullptr) held_input(session, info, *state, &Input::f);
+    if (XR_SUCCEEDED(r) && state != nullptr) {
+        held_input(session, info, *state, &Input::f);
+        synth_input(info, *state, [](XrActionStateFloat& s, float v) { s.currentState = v; });
+    }
     return r;
 }
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetActionStateVector2f(XrSession session, const XrActionStateGetInfo* info, XrActionStateVector2f* state) {
     const XrResult r = g_next_state_vec2(session, info, state);
-    if (XR_SUCCEEDED(r) && state != nullptr) held_input(session, info, *state, &Input::v);
+    if (XR_SUCCEEDED(r) && state != nullptr) {
+        held_input(session, info, *state, &Input::v);
+        synth_input(info, *state, [](XrActionStateVector2f& s, float) { s.currentState = {0.0f, 0.0f}; });
+    }
     return r;
 }
 
@@ -468,6 +662,7 @@ void zero_velocity(XrSpaceVelocity* v) { v->linearVelocity = {0, 0, 0}; v->angul
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrLocateSpace(XrSpace space, XrSpace base, XrTime time, XrSpaceLocation* location) {
     const XrResult r = g_next_locate_space(space, base, time, location);
     heartbeat();
+    report_for(space, time);
     XrPosef held{};
     const LONG mask = XR_SUCCEEDED(r) ? frozen_now() : 0;
     if (location == nullptr || mask == 0 || !held_pose(space, base, time, mask, held)) return r;
@@ -482,6 +677,7 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrLocateSpace(XrSpace space, XrSpace base, XrT
 XrResult locate_spaces(PFN_xrLocateSpaces next, XrSession session, const XrSpacesLocateInfo* info, XrSpaceLocations* out) {
     const XrResult r = next(session, info, out);
     heartbeat();
+    if (info != nullptr) { std::lock_guard _{g_mtx}; report(session, info->time); }
     const LONG mask = XR_SUCCEEDED(r) ? frozen_now() : 0;
     if (info == nullptr || out == nullptr || out->locations == nullptr || mask == 0) return r;
     XrSpaceVelocities* vel = nullptr;
