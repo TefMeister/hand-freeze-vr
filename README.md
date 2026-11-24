@@ -17,7 +17,7 @@
 - **Carry the frozen hands like a Window View window**: with Window View's pointers out, hold a grip while pointing at no
   window; the frozen hands (a picked spot, or a plain freeze) follow your real hand. The right stick turns and tilts them,
   the left stick pushes them away or pulls them closer. BACK IN FRONT OF ME puts them back.
-- Needs the small game script `hand_freeze_spots.lua` in the game's `reframeworkutorun` (the button PUT THE SCRIPT INTO
+- Needs the small game script `hand_freeze_spots.lua` in the game's `reframework\autorun` (the button PUT THE SCRIPT INTO
   THE GAME copies it; read-only, RE Engine games with REFramework), Hand Poser's numbered spots, Visceral RE8's grip zones,
   and **Window View 1.16** (older ones keep the hands still themselves while the pointers are out, and overrule this).
 - How the gun sits in the right hand is learned by itself: hold the gun still for a second, hands not frozen.
