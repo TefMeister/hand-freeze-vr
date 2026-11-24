@@ -251,6 +251,7 @@ static class Spots {
         }
         string z = s.ZoneKey, p = s.Part;
         if (z == null || gun == null || gun.Zone(z) == null) return null;
+        if (p.StartsWith("old magazine in palm")) return null;   // a moment of the reload, not a place the hand can be put yet
         V3 down = new V3(0, -1, 0), back = new V3(0, 0, -1);
         r.Add(new Step { Park = true, Ms = 500 });                       // let go of whatever the last spot left in the hand
         bool spare = p.StartsWith("spare in hand") || p == "two magazines in hand";
