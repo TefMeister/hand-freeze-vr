@@ -42,6 +42,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <set>
 #include <type_traits>
 #include <vector>
 
@@ -206,6 +207,17 @@ LONG buttons_now() {
     return s == nullptr ? 0 : s->buttons;
 }
 
+// v6 (2026-11-25, Tefa: "when i froze hands i could not then use the pointers"): ANOTHER LAYER'S OWN BUTTONS ARE NEVER HELD.
+// A layer nearer the game (Window View) reads its own actions through this one; with BUTTONS TOO its stick click was kept
+// at "not pressed" like one of the game's, so its pointers could not be brought out while a hand was frozen. Such actions
+// are known by their name's start when they are made (xrCreateAction passes through here), and are answered live, always.
+std::set<XrAction> g_not_the_games;
+bool other_layers_action(const char* name) {
+    static const char* const kStarts[] = {"wv_"};   // Window View (window-view-vr layer/controllers.inl)
+    for (const char* s : kStarts) if (std::strncmp(name, s, std::strlen(s)) == 0) return true;
+    return false;
+}
+
 // The held answer for an action state. `live` is the runtime's answer this call; on the first ask after a freeze it is
 // kept (if the action is active) and passed through, every later ask gets the kept state back with "not changed".
 template <class T>
@@ -213,6 +225,7 @@ void held_input(XrSession session, const XrActionStateGetInfo* info, T& live, T 
     std::lock_guard _{g_mtx};
     const LONG mask = buttons_now();
     if (mask == 0 || info == nullptr) return;
+    if (g_not_the_games.count(info->action) != 0) return;   // v6: another layer's own button
     auto& in = g_inputs[{info->action, info->subactionPath}];
     if (in.session == XR_NULL_HANDLE) { in.session = session; in.action = info->action; in.subaction = info->subactionPath; }
     if (in.hand != HAND_LEFT && in.hand != HAND_RIGHT) in.hand = sort_hand(session, info->action, info->subactionPath);
@@ -352,6 +365,7 @@ void synth_input(const XrActionStateGetInfo* info, T& state, Set set) {
     const LONG mask = p->synth;
     if (mask == 0) return;
     std::lock_guard _{g_mtx};
+    if (g_not_the_games.count(info->action) != 0) return;   // v6: another layer's own button
     auto b = g_action_bits.find(info->action);
     const unsigned bits = b == g_action_bits.end() ? 0 : b->second;
     const int hand = hand_of_path(info->subactionPath);
@@ -700,6 +714,13 @@ XrResult locate_spaces(PFN_xrLocateSpaces next, XrSession session, const XrSpace
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrLocateSpaces(XrSession s, const XrSpacesLocateInfo* i, XrSpaceLocations* o) { return locate_spaces(g_next_locate_spaces, s, i, o); }
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrLocateSpacesKHR(XrSession s, const XrSpacesLocateInfo* i, XrSpaceLocations* o) { return locate_spaces(g_next_locate_spaces_khr, s, i, o); }
 
+// v6: note the actions another layer makes for itself (see other_layers_action)
+XRAPI_ATTR XrResult XRAPI_CALL hf_xrCreateAction(XrActionSet set, const XrActionCreateInfo* info, XrAction* action) {
+    const XrResult r = g_next_create_action(set, info, action);
+    if (XR_SUCCEEDED(r) && info != nullptr && action != nullptr && other_layers_action(info->actionName)) { std::lock_guard _{g_mtx}; g_not_the_games.insert(*action); }
+    return r;
+}
+
 XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function) {
     const XrResult r = g_next_gipa(instance, name, function);
     if (XR_FAILED(r) || function == nullptr || *function == nullptr || name == nullptr) return r;
@@ -719,6 +740,7 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrGetInstanceProcAddr(XrInstance instance, con
         {"xrSuggestInteractionProfileBindings", (PFN_xrVoidFunction)hf_xrSuggestInteractionProfileBindings, (PFN_xrVoidFunction*)&g_next_suggest},
         {"xrAttachSessionActionSets", (PFN_xrVoidFunction)hf_xrAttachSessionActionSets, (PFN_xrVoidFunction*)&g_next_attach},
         {"xrSyncActions", (PFN_xrVoidFunction)hf_xrSyncActions, (PFN_xrVoidFunction*)&g_next_sync},
+        {"xrCreateAction", (PFN_xrVoidFunction)hf_xrCreateAction, (PFN_xrVoidFunction*)&g_next_create_action},   // v6
     };
     for (const auto& h : hooks) {
         if (std::strcmp(name, h.name) == 0) { *h.next = *function; *function = h.ours; break; }

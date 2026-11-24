@@ -22,13 +22,13 @@ using Microsoft.Win32;
 static class Program {
     [STAThread]
     static int Main(string[] args) {
-        // tests: --selftest (the sums, no window); --game <folder> a pretend game's folder; --tab spots; --shot <png> a picture of
-        // the window, then close. A test run never touches the registry and may run beside the real window.
+        // tests: --selftest (the sums, no window); --game <folder> a pretend game's folder (--game pretend makes one, a pistol with
+        // the left hand on the slide); --shot <png> a picture of the window, then close. A test run never touches the registry and may run beside the real window.
         var o = new FreezeUi.Options();
         for (int i = 0; i < args.Length; i++) {
             if (args[i] == "--selftest") return SelfTest.Run();
-            if (args[i] == "--game" && i + 1 < args.Length) { o.Game = args[++i]; o.Test = true; }
-            else if (args[i] == "--tab" && i + 1 < args.Length) o.Tab = args[++i];
+            if (args[i] == "--game" && i + 1 < args.Length) { o.Game = args[++i]; o.Test = true; if (o.Game == "pretend") o.Game = SelfTest.PretendGame("ri3046_Inventory", "slide + trigger pulled"); }
+            else if (args[i] == "--tab" && i + 1 < args.Length) ++i;   // v5's tabs are gone (one page since v6); old shortcuts still start
             else if (args[i] == "--shot" && i + 1 < args.Length) { o.Shot = args[++i]; o.Test = true; }
         }
         Application.EnableVisualStyles();

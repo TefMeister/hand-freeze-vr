@@ -27,6 +27,5 @@ if exist "%KITCHECK%" (python "%KITCHECK%" --check || (echo KIT OUT OF STEP & ex
 "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /win32icon:"%HERE%app\hand_freeze.ico" ^
    /out:"%HERE%dist\HandFreeze.exe" "%HERE%app\*.cs" "%HERE%kit\*.cs"
 if errorlevel 1 (echo APP BUILD FAILED & exit /b 1)
-copy /y "%HERE%reframework\autorun\hand_freeze_spots.lua" "%HERE%dist\" >nul
 copy /y "%HERE%app\hand_freeze.ico" "%HERE%dist\" >nul
 echo BUILD OK: %HERE%dist

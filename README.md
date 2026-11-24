@@ -1,31 +1,30 @@
 # Hand Freeze — hold both VR controllers still, in any OpenXR game
 
-<img src="docs/freeze-tab.png" width="380"> <img src="docs/spots-tab.png" width="560">
+<img src="docs/window.png" width="940">
 
-## New on 2026-11-25: the family look, and the SPOTS tab (first version, not worn yet)
+## New in v6 (2026-11-25): one page, the spots written down, and the pointers work while frozen
 
-- **The window looks like the other helpers now** (Hand Poser, Grip Zones, Gun Poser...): two tabs, FREEZE and SPOTS. The
-  pixel-art window (snowflake, flame, Silkscreen font) is kept in `archive/2026-11-25-pixel-window/` and in git.
-- **SPOTS: a rough picture of the gun in hand that turns all the way round** (drag it, the six view buttons, or the turn
-  arrows), drawn from the gun's own joints, with its grip zones as rings and **every numbered hand spot** (Hand Poser's
-  L1, L2 ... R1) as a button tied to the place on the gun it belongs to.
-- **Click a spot: both hands freeze and come up in front of your eyes, already on that spot**, the gun turned the way the
-  picture is turned. The layer tells the game where the two controllers are and presses the grip, trigger or B the spot
-  needs ("ready at" = in the zone, "ready on" = grip held, the plain name = grip and trigger, "at the back" = pulled back,
-  "magazine in hand" = B and pulled down, the spare-magazine spots = the pouch first). A green edge marks the spot the
-  game says the hand is really at, so a spot that did not take shows at once.
-- **Carry the frozen hands like a Window View window**: with Window View's pointers out, hold a grip while pointing at no
-  window; the frozen hands (a picked spot, or a plain freeze) follow your real hand. The right stick turns and tilts them,
-  the left stick pushes them away or pulls them closer. BACK IN FRONT OF ME puts them back.
-- Needs the small game script `hand_freeze_spots.lua` in the game's `reframework\autorun` (the button PUT THE SCRIPT INTO
-  THE GAME copies it; read-only, RE Engine games with REFramework), Hand Poser's numbered spots, Visceral RE8's grip zones,
-  and **Window View 1.16** (older ones keep the hands still themselves while the pointers are out, and overrule this).
-- How the gun sits in the right hand is learned by itself: hold the gun still for a second, hands not frozen.
-- Not in this first version: the body spots (holsters, pouch, map, first aid), right-hand spots other than the trigger,
-  the left stick walking the spot buttons.
-- Checked with no game: `HandFreeze.exe --selftest` (the sums and recipes, all pass) and `test/pose_test.py` on the OpenXR
-  Simulator (the layer gives the game the given poses and presses, with Window View's control mode on too)
-  `[verified-numerically 2026-11-25, n=1]`. **Not yet run in a real game or worn.**
+- **One window, no tabs.** On the left the freeze buttons (ON / OFF, the seconds, LEFT HAND / RIGHT HAND / BOTH HANDS);
+  beside them **every hand spot of the gun in hand**, as Hand Poser numbers them (L1, L2 ... R1, then the holsters, the
+  pouch, the map and first aid). The list changes with the gun.
+- **The spots only tell, nothing is clicked:** a row is **green** while the game says the hand is on that spot, has a
+  **dot** when Hand Poser holds a pose of its own for it, and is grey when it has none yet.
+- **The 3D gun is scrapped for now** (Tefa 2026-11-25: "the idea is cool and it sort of works, but it's janky and needs a
+  lot of work still"): the turnable picture, the click that put both hands on a spot and its game script
+  `hand_freeze_spots.lua` are kept in `archive/2026-11-25-spots-3d-gun/`. Nothing of Hand Freeze's is needed inside the
+  game any more; the spots are read from Hand Poser's own files.
+- **Window View's pointers come out while hands are frozen** (left stick click). With BUTTONS TOO, the layer used to hold
+  Window View's own stick click at "not pressed" along with the game's buttons, whenever Window View's layer sat nearer
+  the game. Another layer's own buttons are now always answered live. `test/other_layer_test.py`: the v5 layer fails it,
+  v6 passes `[verified-numerically 2026-11-25, n=1]`.
+- **Still there: carry the frozen hands like a Window View window.** Pointers out, hold a grip while pointing at no
+  window: the frozen hands follow your real hand; the right stick turns and tilts them, the left stick pushes and pulls.
+  Needs Window View 1.16 or newer. Not worn yet.
+- The sticks: **RIGHT stick click** freezes / un-freezes both hands; **LEFT stick click** is Window View's pointers.
+- Checked with no game: `HandFreeze.exe --selftest` (21 checks), `test/pose_test.py` and `test/other_layer_test.py` on
+  the OpenXR Simulator (close the real Hand Freeze window first: an open one answers for the test's "closed app").
+  **v6 is not yet run in a real game or worn.**
+- The family look came on 2026-11-25 (v5); the pixel-art window before it is in `archive/2026-11-25-pixel-window/`.
 
 A small desktop app that freezes your VR hands in place, so you can set the controllers down and fine-tune
 hand and weapon poses. It has a round switch (red OFF, fading to green ON), a seconds picker, and three rows,
