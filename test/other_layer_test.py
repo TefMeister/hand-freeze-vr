@@ -63,10 +63,18 @@ def main():
     a_game = action("sprint", xr.ActionType.BOOLEAN_INPUT)                   # the game's: the left stick click
     a_wv_click = action("wv_left_stick_click", xr.ActionType.BOOLEAN_INPUT)  # Window View's own, on the same button
     a_wv_trig = action("wv_trigger", xr.ActionType.FLOAT_INPUT)              # ... and its right trigger
-    binds = [(a_game, "/user/hand/left/input/thumbstick/click"), (a_wv_click, "/user/hand/left/input/thumbstick/click"), (a_wv_trig, "/user/hand/right/input/trigger/value")]
+    a_game_pose = action("hand_pose", xr.ActionType.POSE_INPUT)              # the game's hand (v6.1)
+    a_wv_aim = action("wv_aim", xr.ActionType.POSE_INPUT)                    # Window View's pointer ray
+    binds = [(a_game, "/user/hand/left/input/thumbstick/click"), (a_wv_click, "/user/hand/left/input/thumbstick/click"), (a_wv_trig, "/user/hand/right/input/trigger/value"),
+             (a_game_pose, "/user/hand/right/input/grip/pose"), (a_wv_aim, "/user/hand/right/input/aim/pose")]
     xr.suggest_interaction_profile_bindings(instance, xr.InteractionProfileSuggestedBinding(
         interaction_profile=P("/interaction_profiles/oculus/touch_controller"), suggested_bindings=[xr.ActionSuggestedBinding(a, P(p)) for a, p in binds]))
     xr.attach_session_action_sets(session, xr.SessionActionSetsAttachInfo(action_sets=[aset]))
+    # the layer writes how many controller spaces it holds at its heartbeat (any space located): the game's hand space is made
+    # now, Window View's pointer ray when the buttons phase starts; each count is read after a locate
+    local = xr.create_reference_space(session, xr.ReferenceSpaceCreateInfo(reference_space_type=xr.ReferenceSpaceType.LOCAL))
+    game_space = xr.create_action_space(session, xr.ActionSpaceCreateInfo(action=a_game_pose))
+    wv_space, spaces = None, {}
     mgr = SessionStateManager(instance, session, cfg)
 
     script = [("free", 1.5), ("game's button only", 1.5), ("all three", 1.5)]
@@ -89,6 +97,9 @@ def main():
                 active["wv click"] = bool(xr.get_action_state_boolean(session, xr.ActionStateGetInfo(action=a_wv_click)).is_active)
                 active["wv trigger"] = bool(xr.get_action_state_float(session, xr.ActionStateGetInfo(action=a_wv_trig)).is_active)
             held[name] = rd(INPUTS_HELD)
+            if name == "all three" and wv_space is None: wv_space = xr.create_action_space(session, xr.ActionSpaceCreateInfo(action=a_wv_aim))
+            xr.locate_space(game_space, local, fs.predicted_display_time)
+            spaces[name] = rd(28)
             xr.end_frame(session, xr.FrameEndInfo(display_time=fs.predicted_display_time, environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE, layers=[]))
             if now - phase_start >= script[phase_i][1]:
                 phase_i += 1; phase_start = now
@@ -108,6 +119,8 @@ def main():
         print("INCONCLUSIVE: the runtime gave no live buttons (%s), so nothing could be held" % active); return 2
     took_game = held["game's button only"] - held["free"]; took_rest = held["all three"] - held["game's button only"]
     check("the game's button is held by the freeze", took_game == 1, "held %d" % took_game)
+    check("the game's hand space is one the layer can hold", spaces["free"] >= 1, "%d" % spaces["free"])   # the test kit may make spaces of its own too
+    check("Window View's pointer ray is not", spaces["all three"] == spaces["free"], "%d more" % (spaces["all three"] - spaces["free"]))
     check("another layer's own buttons are not", took_rest == 0, "held %d more (wv_left_stick_click, wv_trigger)" % took_rest)
     print("PASS" if not fails else "FAIL (%d)" % len(fails))
     return 0 if not fails else 1

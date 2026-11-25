@@ -113,6 +113,20 @@ static class Spots {
         return res;
     }
 
-    // a gun's name as the window says it ("ri3046_Inventory" -> "ri3046")
-    public static string GunWords(string gun) { return (gun ?? "").Replace("_Inventory", ""); }
+    // a gun's name as the window says it: the game's own name where it is known (Tefa 2026-11-25: "the headline that says letters
+    // and numbers right now ri3046 for Lemi, needs to say weapon name instead"), else the id without the game's ending.
+    // Village's names: visceral-re8-vr's recoil catalogue (dev-archive/native/lua/visceral_re8_menu.lua, REC_CATALOG).
+    static readonly Dictionary<string, string> NAMES = new Dictionary<string, string> {
+        { "ri3008", "M1851 Wolfsbane" }, { "ri3021", "W870 TAC" }, { "ri3023", "GM 79" }, { "ri3036", "M1897" }, { "ri3040", "M1911" },
+        { "ri3042", "F2 Rifle" }, { "ri3046", "LEMI" }, { "ri3047", "V61 Custom" }, { "ri3048", "SYG-12" }, { "ri3049", "WCX" },
+        { "ri3050", "S.T.A.K.E" }, { "ri3115", "Rocket Pistol" }, { "ri3116", "Handcannon PZ" }, { "ri3122", "Samurai Edge - AW Model-01" },
+        { "ri3124", "USM-AI" }, { "ri3125", "Dragoon" }, { "ri3135", "LEMI - Shadows of Rose" }, { "ri3147", "M1897 - Shadows of Rose" },
+        { "ri3081", "LEMI - Mercenaries" }, { "ri3082", "M1911 - Mercenaries" }, { "ri3083", "V61 Custom - Mercenaries" },
+        { "ri3084", "M1897 - Mercenaries" }, { "ri3085", "W870 TAC - Mercenaries" }, { "ri3086", "SYG-12 - Mercenaries" },
+        { "ri3087", "F2 Rifle - Mercenaries" }, { "ri3129", "Dragoon - Mercenaries" }, { "ri3130", "USM-AI - Mercenaries" },
+    };
+    public static string GunWords(string gun) {
+        string id = (gun ?? "").Replace("_Inventory", "");
+        string name; return NAMES.TryGetValue(id, out name) ? name : id;
+    }
 }

@@ -455,6 +455,9 @@ XRAPI_ATTR XrResult XRAPI_CALL hf_xrCreateActionSpace(XrSession session, const X
     const XrResult r = g_next_create_action_space(session, info, space);
     if (XR_FAILED(r) || space == nullptr) return r;
     std::lock_guard _{g_mtx};
+    // v6.1 (Tefa 2026-11-25: the pointers "come out but cannot be moved, they are stuck to hands"): Window View's aim rays are
+    // spaces of its own actions, made through this layer; held, its lasers stood on the frozen hands. Never one of ours.
+    if (info != nullptr && g_not_the_games.count(info->action) != 0) return r;
     Controller c{};
     c.session = session;
     c.action = info != nullptr ? info->action : XR_NULL_HANDLE;

@@ -66,7 +66,8 @@ static class SelfTest {
             Check("the game says the gun and the spot", GameFiles.Now(game, out gun, out spot) && gun == "ri3046_Inventory" && Spots.LeftPart(spot) == "slide" && Spots.RightPart(spot) == "trigger pulled");
             File.SetLastWriteTimeUtc(Path.Combine(GameFiles.PoserData(game), "state.json"), DateTime.UtcNow.AddSeconds(-30));
             Check("an old state file: the game is not answering", !GameFiles.Now(game, out gun, out spot) && gun == "");
-            Check("the gun's name without the game's ending", Spots.GunWords("ri3046_Inventory") == "ri3046");
+            Check("a known gun by its name", Spots.GunWords("ri3046_Inventory") == "LEMI" && Spots.GunWords("ri3008_Inventory") == "M1851 Wolfsbane");
+            Check("an unknown gun by its id, without the game's ending", Spots.GunWords("ri9999_Inventory") == "ri9999" && Spots.GunWords("wp0100") == "wp0100");
         } finally { try { Directory.Delete(game, true); } catch (Exception) { } }
 
         log.AppendLine(failed == 0 ? "ALL PASS" : failed + " FAILED");
